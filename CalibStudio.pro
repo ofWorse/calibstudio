@@ -34,39 +34,65 @@ win32 {
 
 
 
-INCLUDEPATH += $$PWD
+# --- Sources ------------------------------------------------------------------
+# src/app          application entry point and main window
+# src/camera       camera model, discovery interface, device and driver controls
+#   directshow/    Windows cameras (DirectShow): discovery and UVC controls
+#   gige/          GigE Vision discovery (GVCP)
+#   generic/       fallback discovery through OpenCV
+# src/capture      capture thread: camera life cycle and frame delivery
+# src/processing   image processing on frames (preview filters)
+# src/settings     settings saved between runs (camera profiles, filters)
+# src/ui           widgets
+# Includes are written relative to src/, e.g. #include "camera/cameradevice.h".
+INCLUDEPATH += $$PWD/src
 
 SOURCES += \
-    main.cpp \
-    mainwindow.cpp \
-    camera/camerainfo.cpp \
-    camera/cameraprovider.cpp \
-    camera/cameradevice.cpp \
-    camera/capturethread.cpp \
-    camera/gvcp.cpp \
-    camera/gigevisionprovider.cpp \
-    ui/videowidget.cpp
+    src/app/main.cpp \
+    src/app/mainwindow.cpp \
+    src/camera/camerainfo.cpp \
+    src/camera/cameracontrols.cpp \
+    src/camera/cameraprovider.cpp \
+    src/camera/cameradevice.cpp \
+    src/camera/cameraprofile.cpp \
+    src/camera/gige/gvcp.cpp \
+    src/camera/gige/gigevisionprovider.cpp \
+    src/capture/capturethread.cpp \
+    src/processing/framefilter.cpp \
+    src/settings/settingsstore.cpp \
+    src/ui/camerasettingswidget.cpp \
+    src/ui/filterpanel.cpp \
+    src/ui/videowidget.cpp
 
 HEADERS += \
-    mainwindow.h \
-    camera/camerainfo.h \
-    camera/cameraprovider.h \
-    camera/cameradevice.h \
-    camera/capturethread.h \
-    camera/gvcp.h \
-    camera/gigevisionprovider.h \
-    ui/videowidget.h
+    src/app/mainwindow.h \
+    src/camera/camerainfo.h \
+    src/camera/cameracontrols.h \
+    src/camera/cameraprovider.h \
+    src/camera/cameradevice.h \
+    src/camera/cameraprofile.h \
+    src/camera/gige/gvcp.h \
+    src/camera/gige/gigevisionprovider.h \
+    src/capture/capturethread.h \
+    src/processing/framefilter.h \
+    src/settings/settingsstore.h \
+    src/ui/camerasettingswidget.h \
+    src/ui/filterpanel.h \
+    src/ui/videowidget.h
 
 win32 {
-    SOURCES += camera/directshowprovider.cpp
-    HEADERS += camera/directshowprovider.h
+    SOURCES += src/camera/directshow/directshowprovider.cpp \
+               src/camera/directshow/directshowcontrols.cpp
+    HEADERS += src/camera/directshow/directshowprovider.h \
+               src/camera/directshow/directshowcontrols.h \
+               src/camera/directshow/dshowcommon.h
 } else {
-    SOURCES += camera/opencvprobeprovider.cpp
-    HEADERS += camera/opencvprobeprovider.h
+    SOURCES += src/camera/generic/opencvprobeprovider.cpp
+    HEADERS += src/camera/generic/opencvprobeprovider.h
 }
 
 TRANSLATIONS += \
-    CalibStudio_en_US.ts
+    translations/CalibStudio_en_US.ts
 CONFIG += lrelease
 CONFIG += embed_translations
 
