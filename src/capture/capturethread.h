@@ -4,10 +4,10 @@
 #include "camera/cameracontrols.h"
 #include "camera/cameraprofile.h"
 #include "camera/camerainfo.h"
+#include "capture/capturetypes.h"
 #include "processing/framefilter.h"
 
 #include <QImage>
-#include <QMetaType>
 #include <QMutex>
 #include <QString>
 #include <QThread>
@@ -16,11 +16,6 @@
 #include <atomic>
 #include <map>
 #include <mutex>
-
-Q_DECLARE_METATYPE(calib::CameraInfo)
-Q_DECLARE_METATYPE(calib::CameraControlId)
-Q_DECLARE_METATYPE(calib::CameraControlInfo)
-Q_DECLARE_METATYPE(calib::CameraControlState)
 
 namespace cv
 {
@@ -34,11 +29,15 @@ namespace calib
 
 class CameraDevice;
 
+
 class CaptureThread : public QThread
 {
     Q_OBJECT
 
 private:
+    std::mutex cameraMutex;
+    CameraInfo camera;
+
     std::atomic<bool> cameraOpen{false};
     std::atomic<bool> framePending{false};
     std::atomic<quint64> droppedFrames{0};
@@ -65,10 +64,10 @@ private:
     FrameFilter frameFilter;
 
     std::mutex profileMutex;
-    std::map<std::string, CameraProfile> savedProfiles;
+    CameraProfile profile;
 
 public:
-    explicit CaptureThread(QObject* parent = nullptr);
+    explicit CaptureThread(const CameraInfo& camera, QObject* parent = nullptr);
     ~CaptureThread(void) override;
 
     void stop(void);
@@ -78,6 +77,9 @@ public:
         return cameraOpen.load();
     }
 
+    void updateCamera(const calib::CameraInfo& camera);
+    CameraInfo getCamera(void);
+
     QImage takeLatestFrame(void);
 
     void setFlip(bool horizontal, bool vertical);
@@ -85,16 +87,14 @@ public:
     void resetControls(void);
     void selectMode(int modeIndex);
     void setFilterSettings(const calib::FilterSettings& settings);
-    void setSavedProfiles(const std::map<std::string, CameraProfile>& profiles);
-    void setSavedProfile(const std::string& key, const CameraProfile& profile);
+    void setProfile(const calib::CameraProfile& profile);
 
 signals:
     void statusChanged(const QString& message);
-    void camerasDiscovered(const QVector<calib::CameraInfo>& cameras);
-    void cameraOpened(int listIndex, const QString& description);
+    void cameraOpened(const QString& description);
     void cameraClosed(const QString& reason);
     void frameReady(void);
-    void statisticsUpdated(double captureFps, quint64 droppedFrames, double filterMs);
+    void statisticsUpdated(double captureFps, quint64 droppedFrames, double filterMs, quint64 incompleteFrames);
     void cameraConfigured(const calib::CameraInfo& camera, int modeIndex,
                           const QVector<calib::CameraControlInfo>& controls,
                           const QVector<calib::CameraControlState>& states, bool flipHorizontal, bool flipVertical);
@@ -104,11 +104,11 @@ protected:
     void run(void) override;
 
 private:
-    QVector<CameraInfo> discoverCameras(void);
-    QString streamUntilStopped(CameraDevice& device, int listIndex);
-    bool applyPendingCommands(CameraDevice& device, int listIndex, QString* failure);
-    void announceCamera(const CameraDevice& device, int listIndex);
-    int savedModeIndex(const CameraInfo& camera);
+    bool openCamera(CameraDevice& device, QString* error);
+    QString streamUntilStopped(CameraDevice& device);
+    bool applyPendingCommands(CameraDevice& device, QString* failure);
+    void announceCamera(const CameraDevice& device);
+    int savedModeIndex(const CameraInfo& target);
     void restoreProfile(CameraDevice& device);
     void publishFrame(const cv::Mat& frame);
     void sleepInterruptible(int milliseconds);

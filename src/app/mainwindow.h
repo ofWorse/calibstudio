@@ -11,70 +11,113 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 
+class QDockWidget;
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
+class QMdiArea;
+class QMdiSubWindow;
 class QTimer;
 
 namespace calib
 {
 
 class CameraSettingsWidget;
-class FilterPanel;
+class CameraWindow;
 class CaptureThread;
+class DiscoveryThread;
+class FilterPanel;
 class SettingsStore;
-class VideoWidget;
 
 } // namespace calib
 
+// Every camera ticked in the camera list streams in its own thread into its
+// own window. The settings and filter panels work on the active window.
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 private:
-    calib::VideoWidget* video = nullptr;
+    struct CameraSession
+    {
+        calib::CameraInfo camera;
+        std::string profileKey;
+        calib::CaptureThread* capture = nullptr;
+        calib::CameraWindow* window = nullptr;
+        calib::FilterSettings filters;
+        bool configured = false;
+        int modeIndex = -1;
+        QVector<calib::CameraControlInfo> controls;
+        QVector<calib::CameraControlState> states;
+        bool flipHorizontal = false;
+        bool flipVertical = false;
+        QString status;
+        QString statistics;
+    };
+
+    QMdiArea* views = nullptr;
     QListWidget* cameraList = nullptr;
     calib::CameraSettingsWidget* settings = nullptr;
     calib::FilterPanel* filters = nullptr;
+    QDockWidget* settingsDock = nullptr;
+    QDockWidget* filtersDock = nullptr;
     QLabel* statusLabel = nullptr;
     QLabel* statsLabel = nullptr;
-    calib::CaptureThread* capture = nullptr;
-    QVector<calib::CameraInfo> cameras;
+    calib::DiscoveryThread* discovery = nullptr;
 
-    // Saved settings. Changes are collected here and written to disk a moment
-    // later, so dragging a slider does not rewrite the file on every step.
+    QVector<calib::CameraInfo> cameras;
+    std::map<std::string, std::unique_ptr<CameraSession>> sessions;
+    std::string activeId;
+    std::set<std::string> enabledIds;
+    bool enabledLoaded = false;
+    bool updatingPanels = false;
+    bool updatingList = false;
+    bool autoTile = true;
+
     std::unique_ptr<calib::SettingsStore> store;
-    std::map<std::string, calib::CameraProfile> profiles;   // key: calib::profileKey()
-    calib::CameraInfo activeCamera;                         // valid while activeKey is set
-    std::string activeKey;
-    bool profileDirty = false;
-    bool filtersDirty = false;
+    std::map<std::string, calib::CameraProfile> profiles;
+    std::map<std::string, QString> profileNames;
+    std::set<std::string> dirtyProfiles;
+    std::map<std::string, calib::FilterSettings> dirtyFilters;
+    bool enabledDirty = false;
     QTimer* saveTimer = nullptr;
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow(void) override;
 
-private:
-    void onFrameReady(void);
-    void onCamerasDiscovered(const QVector<calib::CameraInfo>& cameras);
-    void onCameraOpened(int listIndex, const QString& description);
-    void onCameraClosed(const QString& reason);
-    void onStatusChanged(const QString& message);
-    void onStatisticsUpdated(double captureFps, quint64 droppedFrames, double filterMs);
-    void highlightActiveCamera(int listIndex);
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
-    void onCameraConfigured(const calib::CameraInfo& camera, int modeIndex,
-                            const QVector<calib::CameraControlInfo>& controls,
-                            const QVector<calib::CameraControlState>& states, bool flipHorizontal, bool flipVertical);
+private:
+    void onCamerasDiscovered(const QVector<calib::CameraInfo>& cameras);
+    void rebuildCameraList(void);
+    void onCameraItemChanged(QListWidgetItem* item);
+    void setCameraEnabled(const std::string& id, bool enabled);
+    void startSession(const calib::CameraInfo& camera);
+    void stopSession(const std::string& id);
+    CameraSession* findSession(const std::string& id);
+    CameraSession* activeSession(void);
+
+    void tileWindows(void);
+    void expandWindows(void);
+    void highlightActiveCamera(void);
+    void onWindowActivated(QMdiSubWindow* window);
+    void showActiveSession(void);
+    void showStatus(void);
+
     void onModeRequested(int modeIndex);
     void onFlipChanged(bool horizontal, bool vertical);
     void onControlRequested(calib::CameraControlId id, const calib::CameraControlState& state);
     void onResetRequested(void);
-    void onFiltersChanged(const calib::FilterSettings& settings);
+    void onFiltersChanged(const calib::FilterSettings& filterSettings);
+
     calib::CameraProfile* activeProfile(void);
-    void profileChanged(void);
+    void profileChanged(CameraSession& session);
+    void scheduleSave(void);
     void saveNow(void);
 };
 

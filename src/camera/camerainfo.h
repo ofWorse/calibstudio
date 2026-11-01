@@ -1,6 +1,7 @@
 #ifndef CALIBSTUDIO_CAMERAINFO_H
 #define CALIBSTUDIO_CAMERAINFO_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,11 @@ struct CameraInfo
     std::string notStreamableReason;
 
     std::vector<VideoMode> modes;
+
+    std::uint32_t deviceIp = 0;
+    std::uint32_t hostIp = 0;
+    std::uint32_t hostNetmask = 0;
+    std::string notice;
 };
 
 

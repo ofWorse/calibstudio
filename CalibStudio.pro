@@ -23,12 +23,15 @@ win32 {
             -lopencv_imgcodecs \
             -lopencv_videoio
 
-    LIBS += -lstrmiids -lole32 -loleaut32 -luuid
+    LIBS += -lstrmiids -lole32 -loleaut32 -luuid -lws2_32 -liphlpapi
     DEFINES += NOMINMAX
 } else {
     CONFIG += link_pkgconfig
     PKGCONFIG += opencv4
 }
+
+# zlib: unpacks the GenICam file GigE Vision cameras store zipped.
+LIBS += -lz
 
 
 
@@ -38,9 +41,10 @@ win32 {
 # src/app          application entry point and main window
 # src/camera       camera model, discovery interface, device and driver controls
 #   directshow/    Windows cameras (DirectShow): discovery and UVC controls
-#   gige/          GigE Vision discovery (GVCP)
+#   gige/          GigE Vision without a vendor SDK: discovery and IP setup,
+#                  control (GVCP), GenICam XML, image stream (GVSP)
 #   generic/       fallback discovery through OpenCV
-# src/capture      capture thread: camera life cycle and frame delivery
+# src/capture      discovery thread, and one capture thread per open camera
 # src/processing   image processing on frames (preview filters)
 # src/settings     settings saved between runs (camera profiles, filters)
 # src/ui           widgets
@@ -55,13 +59,23 @@ SOURCES += \
     src/camera/cameraprovider.cpp \
     src/camera/cameradevice.cpp \
     src/camera/cameraprofile.cpp \
-    src/camera/gige/gvcp.cpp \
+    src/camera/gige/genicam.cpp \
+    src/camera/gige/gigedevice.cpp \
     src/camera/gige/gigevisionprovider.cpp \
+    src/camera/gige/gvcp.cpp \
+    src/camera/gige/gvcpclient.cpp \
+    src/camera/gige/gvsp.cpp \
+    src/camera/gige/udpsocket.cpp \
     src/capture/capturethread.cpp \
+    src/capture/capturetypes.cpp \
+    src/capture/discoverythread.cpp \
     src/processing/framefilter.cpp \
     src/settings/settingsstore.cpp \
     src/ui/camerasettingswidget.cpp \
+    src/ui/camerawindow.cpp \
     src/ui/filterpanel.cpp \
+    src/ui/theme.cpp \
+    src/ui/windowchrome.cpp \
     src/ui/videowidget.cpp
 
 HEADERS += \
@@ -71,13 +85,23 @@ HEADERS += \
     src/camera/cameraprovider.h \
     src/camera/cameradevice.h \
     src/camera/cameraprofile.h \
-    src/camera/gige/gvcp.h \
+    src/camera/gige/genicam.h \
+    src/camera/gige/gigedevice.h \
     src/camera/gige/gigevisionprovider.h \
+    src/camera/gige/gvcp.h \
+    src/camera/gige/gvcpclient.h \
+    src/camera/gige/gvsp.h \
+    src/camera/gige/udpsocket.h \
     src/capture/capturethread.h \
+    src/capture/capturetypes.h \
+    src/capture/discoverythread.h \
     src/processing/framefilter.h \
     src/settings/settingsstore.h \
     src/ui/camerasettingswidget.h \
+    src/ui/camerawindow.h \
     src/ui/filterpanel.h \
+    src/ui/theme.h \
+    src/ui/windowchrome.h \
     src/ui/videowidget.h
 
 win32 {

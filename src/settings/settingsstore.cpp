@@ -15,6 +15,7 @@ namespace
 
 const QString kCameraPrefix = QStringLiteral("camera-");
 const QString kFilters = QStringLiteral("filters");
+const QString kView = QStringLiteral("view");
 
 
 QString sectionFor(const std::string& key)
@@ -30,8 +31,7 @@ struct StructureName
     const char* name;
 };
 
-constexpr StructureName kStructureNames[] =
-{
+constexpr StructureName kStructureNames[] = {
     {StructureFilter::None,              "none"              },
     {StructureFilter::FixedThreshold,    "fixed_threshold"   },
     {StructureFilter::OtsuThreshold,     "otsu_threshold"    },
@@ -45,8 +45,7 @@ struct ColorMapName
     const char* name;
 };
 
-constexpr ColorMapName kColorMapNames[] =
-{
+constexpr ColorMapName kColorMapNames[] = {
     {FalseColorMap::None,    "none"   },
     {FalseColorMap::Jet,     "jet"    },
     {FalseColorMap::Turbo,   "turbo"  },
@@ -201,11 +200,22 @@ void SettingsStore::saveCameraProfile(const std::string& key, const QString& cam
     settings->endGroup();
 }
 
-FilterSettings SettingsStore::loadFilterSettings(void) const
+FilterSettings SettingsStore::loadFilterSettings(const std::string& cameraKey) const
 {
+    QString group = kFilters;
+    if(!cameraKey.empty() && settings->childGroups().contains(sectionFor(cameraKey)))
+    {
+        settings->beginGroup(sectionFor(cameraKey));
+        if(settings->childGroups().contains(kFilters))
+        {
+            group = sectionFor(cameraKey) + QLatin1Char('/') + kFilters;
+        }
+        settings->endGroup();
+    }
+
     const FilterSettings defaults;
     FilterSettings filters;
-    settings->beginGroup(kFilters);
+    settings->beginGroup(group);
     filters.grayscale = settings->value(QStringLiteral("grayscale"), defaults.grayscale).toBool();
     filters.negative = settings->value(QStringLiteral("negative"), defaults.negative).toBool();
     filters.colorMap = colorMapFromName(settings->value(QStringLiteral("color_map")).toString());
@@ -224,7 +234,34 @@ FilterSettings SettingsStore::loadFilterSettings(void) const
     return filters;
 }
 
-void SettingsStore::saveFilterSettings(const FilterSettings& filters)
+void SettingsStore::saveFilterSettings(const FilterSettings& filters, const std::string& cameraKey)
+{
+    if(!cameraKey.empty())
+    {
+        settings->beginGroup(sectionFor(cameraKey));
+        writeFilters(filters);
+        settings->endGroup();
+    }
+    writeFilters(filters);
+}
+
+bool SettingsStore::loadEnabledCameras(QStringList* ids) const
+{
+    const QString key = kView + QStringLiteral("/enabled_cameras");
+    if(!settings->contains(key))
+    {
+        return false;
+    }
+    *ids = settings->value(key).toStringList();
+    return true;
+}
+
+void SettingsStore::saveEnabledCameras(const QStringList& ids)
+{
+    settings->setValue(kView + QStringLiteral("/enabled_cameras"), ids);
+}
+
+void SettingsStore::writeFilters(const FilterSettings& filters)
 {
     settings->beginGroup(kFilters);
     settings->setValue(QStringLiteral("grayscale"), filters.grayscale);

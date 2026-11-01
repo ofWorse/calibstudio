@@ -1,5 +1,8 @@
 #include "camera/cameradevice.h"
 
+#include "camera/gige/gigedevice.h"
+#include "camera/gige/gvsp.h"
+
 #include <cctype>
 #include <chrono>
 #include <thread>
@@ -13,6 +16,7 @@ namespace
 
 constexpr double kMinLiveFps = 24.0;
 constexpr auto kFirstFrameTimeout = std::chrono::seconds(3);
+constexpr int kGigEReadTimeoutMs = 1000;
 
 void setError(std::string* error, std::string message)
 {
@@ -77,6 +81,8 @@ const VideoMode* pickLiveMode(const std::vector<VideoMode>& modes)
     return best;
 }
 
+CameraDevice::CameraDevice(void) = default;
+
 CameraDevice::~CameraDevice(void)
 {
     close();
@@ -85,6 +91,11 @@ CameraDevice::~CameraDevice(void)
 bool CameraDevice::open(const CameraInfo& info, std::string* error, int modeIndex)
 {
     close();
+
+    if(info.transport == CameraTransport::GigE)
+    {
+        return openGigE(info, error);
+    }
 
     if(!info.streamable || info.captureIndex < 0)
     {
@@ -142,7 +153,6 @@ bool CameraDevice::open(const CameraInfo& info, std::string* error, int modeInde
         activeMode.fourcc = fourccToString(static_cast<int>(capture.get(cv::CAP_PROP_FOURCC)));
         activeMode.compressed = activeMode.fourcc == "MJPG";
 
-        // Optional: a camera without driver controls still streams.
         controls = createCameraControls(info);
 
         return true;
@@ -153,6 +163,58 @@ bool CameraDevice::open(const CameraInfo& info, std::string* error, int modeInde
         setError(error, e.what());
         return false;
     }
+}
+
+bool CameraDevice::openGigE(const CameraInfo& info, std::string* error)
+{
+    if(!info.streamable)
+    {
+        setError(error, info.notStreamableReason);
+        return false;
+    }
+
+    auto device = std::make_unique<GigEDevice>();
+    if(!device->open(info, error))
+    {
+        return false;
+    }
+
+    cv::Mat first;
+    const auto deadline = std::chrono::steady_clock::now() + kFirstFrameTimeout;
+    bool gotFrame = false;
+    while(!gotFrame && device->isOpened() && std::chrono::steady_clock::now() < deadline)
+    {
+        gotFrame = device->read(first, 500);
+    }
+    if(!gotFrame)
+    {
+        if(device->getReceivedPackets() == 0)
+        {
+            setError(error,
+                     "the camera started streaming but no image packet arrived (" + device->getLastError()
+                         + "). Allow CalibStudio in the firewall for this network (incoming UDP).");
+        }
+        else
+        {
+            const std::uint64_t received = device->getReceivedPackets();
+            const std::uint64_t lost = device->getLostPackets();
+            setError(error,
+                     "images arrive incomplete (" + std::to_string(lost * 100 / (received + lost))
+                         + "% of the packets are lost). Connect the camera to its own network card, raise "
+                           "the card's receive buffers or lower the camera's frame rate.");
+        }
+        return false;
+    }
+
+    this->info = info;
+    activeModeIndex = -1;
+    activeMode.width = first.cols;
+    activeMode.height = first.rows;
+    activeMode.maxFps = 0.0;
+    activeMode.fourcc = gvsp::pixelFormatName(device->getPixelFormat());
+    activeMode.compressed = false;
+    gige = std::move(device);
+    return true;
 }
 
 void CameraDevice::applyMode(const VideoMode& mode, int captureApi)
@@ -188,12 +250,14 @@ void CameraDevice::applyMode(const VideoMode& mode, int captureApi)
 
 bool CameraDevice::isOpened(void) const
 {
-    return capture.isOpened();
+    return capture.isOpened() || (gige && gige->isOpened());
 }
 
 void CameraDevice::close(void)
 {
     controls.reset();
+    gige.reset();
+    lastError.clear();
     if(capture.isOpened())
     {
         capture.release();
@@ -205,6 +269,15 @@ void CameraDevice::close(void)
 
 bool CameraDevice::read(cv::Mat& frame)
 {
+    if(gige)
+    {
+        if(gige->read(frame, kGigEReadTimeoutMs))
+        {
+            return true;
+        }
+        lastError = gige->getLastError();
+        return false;
+    }
     if(!capture.isOpened())
     {
         return false;
@@ -219,8 +292,17 @@ bool CameraDevice::read(cv::Mat& frame)
     }
 }
 
+std::uint64_t CameraDevice::getIncompleteFrames(void) const
+{
+    return gige ? gige->getIncompleteFrames() : 0;
+}
+
 std::string CameraDevice::backendName(void) const
 {
+    if(gige)
+    {
+        return "GigE Vision (GVSP, " + std::to_string(gige->getPacketSize()) + "-byte packets)";
+    }
     if(!capture.isOpened())
     {
         return {};

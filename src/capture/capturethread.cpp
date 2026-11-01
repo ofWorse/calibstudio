@@ -1,7 +1,6 @@
 #include "capture/capturethread.h"
 
 #include "camera/cameradevice.h"
-#include "camera/cameraprovider.h"
 
 #include <QElapsedTimer>
 #include <QLoggingCategory>
@@ -10,7 +9,6 @@
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/videoio/registry.hpp>
 
 #include <chrono>
 #include <utility>
@@ -28,7 +26,7 @@ namespace
 {
 
 
-constexpr int kRediscoveryIntervalMs = 2000;
+constexpr int kReconnectIntervalMs = 2000;
 constexpr int kMaxConsecutiveReadFailures = 50;
 
 
@@ -59,7 +57,7 @@ QImage matToQImage(const cv::Mat& mat, bool flipX, bool flipY)
 #endif
     case CV_8UC1:
         return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_Grayscale8), flipX, flipY);
-    case CV_8UC4: // BGRA in memory == ARGB32 on little-endian machines
+    case CV_8UC4:
         return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_ARGB32), flipX, flipY);
     case CV_16UC1:
         return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_Grayscale16), flipX, flipY);
@@ -72,27 +70,13 @@ QString qs(const std::string& text)
     return QString::fromStdString(text);
 }
 
-void logAvailableBackends(void)
-{
-    QStringList names;
-    for(const cv::VideoCaptureAPIs api : cv::videoio_registry::getCameraBackends())
-    {
-        names << qs(cv::videoio_registry::getBackendName(api));
-    }
-    qCInfo(lcCapture) << "OpenCV camera backends:" << names.join(QStringLiteral(", "));
-}
-
 } // namespace
 
-CaptureThread::CaptureThread(QObject* parent)
-    : QThread(parent)
+CaptureThread::CaptureThread(const CameraInfo& camera, QObject* parent)
+    : QThread(parent),
+      camera(camera)
 {
-    qRegisterMetaType<calib::CameraInfo>("calib::CameraInfo");
-    qRegisterMetaType<QVector<calib::CameraInfo>>("QVector<calib::CameraInfo>");
-    qRegisterMetaType<calib::CameraControlId>("calib::CameraControlId");
-    qRegisterMetaType<calib::CameraControlState>("calib::CameraControlState");
-    qRegisterMetaType<QVector<calib::CameraControlInfo>>("QVector<calib::CameraControlInfo>");
-    qRegisterMetaType<QVector<calib::CameraControlState>>("QVector<calib::CameraControlState>");
+    registerCaptureTypes();
 }
 
 CaptureThread::~CaptureThread(void)
@@ -151,16 +135,22 @@ void CaptureThread::setFilterSettings(const FilterSettings& settings)
     filtersChanged = true;
 }
 
-void CaptureThread::setSavedProfiles(const std::map<std::string, CameraProfile>& profiles)
+void CaptureThread::setProfile(const CameraProfile& profile)
 {
     std::lock_guard<std::mutex> lock(profileMutex);
-    savedProfiles = profiles;
+    this->profile = profile;
 }
 
-void CaptureThread::setSavedProfile(const std::string& key, const CameraProfile& profile)
+void CaptureThread::updateCamera(const CameraInfo& camera)
 {
-    std::lock_guard<std::mutex> lock(profileMutex);
-    savedProfiles[key] = profile;
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    this->camera = camera;
+}
+
+CameraInfo CaptureThread::getCamera(void)
+{
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    return camera;
 }
 
 void CaptureThread::selectMode(int modeIndex)
@@ -176,60 +166,11 @@ void CaptureThread::run(void)
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 #endif
 
-    logAvailableBackends();
-    QStringList lastCameraIds;
-
     while(!isInterruptionRequested())
     {
-        emit statusChanged(tr("Searching for cameras..."));
-        const QVector<CameraInfo> cameras = discoverCameras();
-        if(isInterruptionRequested())
-        {
-            break;
-        }
-
-        QStringList ids;
-        for(const CameraInfo& camera : cameras)
-        {
-            ids << qs(camera.id);
-        }
-        if(ids != lastCameraIds)
-        {
-            lastCameraIds = ids;
-            for(const CameraInfo& camera : cameras)
-            {
-                qCInfo(lcCapture).noquote() << "Found" << qs(describe(camera)) << "via" << qs(camera.api);
-            }
-            emit camerasDiscovered(cameras);
-        }
-
         CameraDevice device;
-        int openedIndex = -1;
-        for(int i = 0; i < cameras.size() && !isInterruptionRequested(); ++i)
-        {
-            const CameraInfo& camera = cameras.at(i);
-            if(!camera.streamable)
-            {
-                continue;
-            }
-            emit statusChanged(tr("Connecting to %1...").arg(qs(camera.name)));
-            std::string error;
-            const int savedMode = savedModeIndex(camera);
-            bool opened = device.open(camera, &error, savedMode);
-            if(!opened && savedMode >= 0)
-            {
-                qCWarning(lcCapture).noquote() << "Saved video mode failed:" << qs(error);
-                opened = device.open(camera, &error);
-            }
-            if(opened)
-            {
-                openedIndex = i;
-                break;
-            }
-            qCWarning(lcCapture).noquote() << "Cannot open" << qs(camera.name) << ":" << qs(error);
-        }
-
-        if(device.isOpened())
+        QString error;
+        if(openCamera(device, &error))
         {
             cameraOpen = true;
             droppedFrames = 0;
@@ -239,9 +180,9 @@ void CaptureThread::run(void)
                 commandsPending = false;
             }
             restoreProfile(device);
-            announceCamera(device, openedIndex);
+            announceCamera(device);
 
-            const QString reason = streamUntilStopped(device, openedIndex);
+            const QString reason = streamUntilStopped(device);
 
             device.close();
             cameraOpen = false;
@@ -251,13 +192,13 @@ void CaptureThread::run(void)
             {
                 break;
             }
+            emit statusChanged(tr("Camera closed: %1. Reconnecting...").arg(reason));
         }
-        else
+        else if(!isInterruptionRequested())
         {
-            emit statusChanged(cameras.isEmpty() ? tr("No camera found. Searching again...")
-                                                 : tr("No camera could be opened. Searching again..."));
+            emit statusChanged(tr("Cannot open the camera: %1. Retrying...").arg(error));
         }
-        sleepInterruptible(kRediscoveryIntervalMs);
+        sleepInterruptible(kReconnectIntervalMs);
     }
 
 #ifdef _WIN32
@@ -268,32 +209,32 @@ void CaptureThread::run(void)
 #endif
 }
 
-QVector<CameraInfo> CaptureThread::discoverCameras()
+bool CaptureThread::openCamera(CameraDevice& device, QString* error)
 {
-    QVector<CameraInfo> cameras;
-    for(const auto& provider : createDefaultProviders())
-    {
-        if(isInterruptionRequested())
-        {
-            break;
-        }
+    const CameraInfo current = getCamera();
+    emit statusChanged(tr("Connecting to %1...").arg(qs(current.name)));
 
-        std::string error;
-        std::vector<CameraInfo> found = provider->enumerate(&error);
-        if(!error.empty())
+    std::string why;
+    const int savedMode = savedModeIndex(current);
+    bool opened = device.open(current, &why, savedMode);
+    if(!opened && savedMode >= 0 && !isInterruptionRequested())
+    {
+        qCWarning(lcCapture).noquote() << "Saved video mode failed:" << qs(why);
+        opened = device.open(current, &why);
+    }
+    if(!opened)
+    {
+        qCWarning(lcCapture).noquote() << "Cannot open" << qs(current.name) << ":" << qs(why);
+        *error = qs(why);
+        while(error->endsWith(QLatin1Char('.')))
         {
-            qCWarning(lcCapture).noquote() << provider->name() << "discovery failed:" << qs(error);
-        }
-        for(CameraInfo& camera : found)
-        {
-            cameras.push_back(std::move(camera));
+            error->chop(1);
         }
     }
-
-    return cameras;
+    return opened;
 }
 
-QString CaptureThread::streamUntilStopped(CameraDevice& device, int listIndex)
+QString CaptureThread::streamUntilStopped(CameraDevice& device)
 {
     cv::Mat frame;
     int consecutiveFailures = 0;
@@ -307,7 +248,7 @@ QString CaptureThread::streamUntilStopped(CameraDevice& device, int listIndex)
         if(commandsPending.load())
         {
             QString failure;
-            if(!applyPendingCommands(device, listIndex, &failure))
+            if(!applyPendingCommands(device, &failure))
             {
                 return failure;
             }
@@ -315,6 +256,10 @@ QString CaptureThread::streamUntilStopped(CameraDevice& device, int listIndex)
 
         if(!device.read(frame))
         {
+            if(!device.isOpened())
+            {
+                return tr("connection lost (%1)").arg(qs(device.getLastError()));
+            }
             if(++consecutiveFailures >= kMaxConsecutiveReadFailures)
             {
                 return tr("the camera stopped delivering frames (unplugged?)");
@@ -344,11 +289,11 @@ QString CaptureThread::streamUntilStopped(CameraDevice& device, int listIndex)
                 / framesInWindow;
             framesInWindow = 0;
             filterTimeInWindow = {};
-            emit statisticsUpdated(fps, droppedFrames.load(), filterMs);
+            emit statisticsUpdated(fps, droppedFrames.load(), filterMs, device.getIncompleteFrames());
         }
     }
 
-    return tr("the application is closing");
+    return tr("stopped");
 }
 
 void CaptureThread::publishFrame(const cv::Mat& frame)
@@ -374,13 +319,13 @@ void CaptureThread::publishFrame(const cv::Mat& frame)
     }
 }
 
-void CaptureThread::announceCamera(const CameraDevice& device, int listIndex)
+void CaptureThread::announceCamera(const CameraDevice& device)
 {
     const QString description = QStringLiteral("%1 - %2 via %3")
                                     .arg(qs(device.getInfo().name), qs(describe(device.getActiveMode())),
                                          qs(device.backendName()));
     qCInfo(lcCapture).noquote() << "Connected:" << description;
-    emit cameraOpened(listIndex, description);
+    emit cameraOpened(description);
 
     QVector<CameraControlInfo> controlInfos;
     QVector<CameraControlState> controlStates;
@@ -399,43 +344,38 @@ void CaptureThread::announceCamera(const CameraDevice& device, int listIndex)
                           flipHorizontal.load(), flipVertical.load());
 }
 
-int CaptureThread::savedModeIndex(const CameraInfo& camera)
+int CaptureThread::savedModeIndex(const CameraInfo& target)
 {
     std::lock_guard<std::mutex> lock(profileMutex);
-    const auto it = savedProfiles.find(profileKey(camera));
-    if(it == savedProfiles.end() || !it->second.hasMode)
+    if(!profile.hasMode)
     {
         return -1;
     }
-    return findMode(camera.modes, it->second.mode);
+    return findMode(target.modes, profile.mode);
 }
 
 void CaptureThread::restoreProfile(CameraDevice& device)
 {
-    CameraProfile profile;
+    CameraProfile saved;
     {
         std::lock_guard<std::mutex> lock(profileMutex);
-        const auto it = savedProfiles.find(profileKey(device.getInfo()));
-        if(it != savedProfiles.end())
-        {
-            profile = it->second;
-        }
+        saved = profile;
     }
 
-    flipHorizontal = profile.flipHorizontal;
-    flipVertical = profile.flipVertical;
+    flipHorizontal = saved.flipHorizontal;
+    flipVertical = saved.flipVertical;
 
     int restored = 0;
     if(ICameraControls* controls = device.getControls())
     {
         for(const CameraControlInfo& control : controls->list())
         {
-            const auto saved = profile.controls.find(control.id);
-            if(saved == profile.controls.end())
+            const auto value = saved.controls.find(control.id);
+            if(value == saved.controls.end())
             {
                 continue;
             }
-            if(controls->set(control.id, saved->second))
+            if(controls->set(control.id, value->second))
             {
                 ++restored;
             }
@@ -452,7 +392,7 @@ void CaptureThread::restoreProfile(CameraDevice& device)
     }
 }
 
-bool CaptureThread::applyPendingCommands(CameraDevice& device, int listIndex, QString* failure)
+bool CaptureThread::applyPendingCommands(CameraDevice& device, QString* failure)
 {
     PendingCommands commands;
     {
@@ -464,24 +404,24 @@ bool CaptureThread::applyPendingCommands(CameraDevice& device, int listIndex, QS
     const int modeCount = static_cast<int>(device.getInfo().modes.size());
     if(commands.modeIndex >= 0 && commands.modeIndex < modeCount && commands.modeIndex != device.getActiveModeIndex())
     {
-        const CameraInfo camera = device.getInfo();
+        const CameraInfo opened = device.getInfo();
         emit statusChanged(
             tr("Switching %1 to %2...")
-                .arg(qs(camera.name), qs(describe(camera.modes.at(static_cast<size_t>(commands.modeIndex))))));
+                .arg(qs(opened.name), qs(describe(opened.modes.at(static_cast<size_t>(commands.modeIndex))))));
         device.close();
 
         std::string error;
-        if(!device.open(camera, &error, commands.modeIndex))
+        if(!device.open(opened, &error, commands.modeIndex))
         {
             qCWarning(lcCapture).noquote() << "Cannot switch video mode:" << qs(error);
-            if(!device.open(camera, &error))
+            if(!device.open(opened, &error))
             {
                 *failure = tr("the camera could not be reopened (%1)").arg(qs(error));
                 return false;
             }
         }
         restoreProfile(device);
-        announceCamera(device, listIndex);
+        announceCamera(device);
     }
 
     ICameraControls* controls = device.getControls();

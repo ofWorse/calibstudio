@@ -5,6 +5,7 @@
 #include "processing/framefilter.h"
 
 #include <QString>
+#include <QStringList>
 
 #include <map>
 #include <memory>
@@ -32,10 +33,16 @@ public:
     std::map<std::string, CameraProfile> loadCameraProfiles(void) const;
     void saveCameraProfile(const std::string& key, const QString& cameraName, const CameraProfile& profile);
 
-    FilterSettings loadFilterSettings(void) const;
-    void saveFilterSettings(const FilterSettings& filters);
+    FilterSettings loadFilterSettings(const std::string& cameraKey = {}) const;
+    void saveFilterSettings(const FilterSettings& filters, const std::string& cameraKey = {});
+
+    bool loadEnabledCameras(QStringList* ids) const;
+    void saveEnabledCameras(const QStringList& ids);
 
     void sync(void);
+
+private:
+    void writeFilters(const FilterSettings& filters);
 };
 
 

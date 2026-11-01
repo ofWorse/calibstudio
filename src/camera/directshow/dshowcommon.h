@@ -50,7 +50,6 @@ public:
         return ptr != nullptr;
     }
 
-    // Releases the current object and returns the slot for an out-parameter
     T** put(void)
     {
         reset();
@@ -127,7 +126,7 @@ inline std::string toUtf8(const wchar_t* text)
 
     std::string result(static_cast<size_t>(size), '\0');
     WideCharToMultiByte(CP_UTF8, 0, text, -1, &result[0], size, nullptr, nullptr);
-    result.resize(static_cast<size_t>(size - 1)); // drop the terminating NUL
+    result.resize(static_cast<size_t>(size - 1));
 
     return result;
 }

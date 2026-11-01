@@ -1,4 +1,5 @@
 #include "app/mainwindow.h"
+#include "ui/theme.h"
 
 #include <QApplication>
 #include <QLocale>
@@ -8,6 +9,7 @@ int main(int argc, char* argv[])
 {
     QApplication a(argc, argv);
     QApplication::setApplicationName(QStringLiteral("CalibStudio"));
+    calib::theme::apply(a);
 
     QTranslator translator;
     const QStringList uiLanguages = QLocale::system().uiLanguages();
@@ -20,7 +22,6 @@ int main(int argc, char* argv[])
             break;
         }
     }
-
     MainWindow w;
     w.show();
     return a.exec();
