@@ -54,6 +54,7 @@ struct CameraInfo
     std::uint32_t deviceIp = 0;
     std::uint32_t hostIp = 0;
     std::uint32_t hostNetmask = 0;
+    std::uint32_t hostMtu = 0;
     std::string notice;
 };
 

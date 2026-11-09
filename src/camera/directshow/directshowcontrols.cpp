@@ -24,8 +24,7 @@ struct ControlMapping
     long property;
 };
 
-constexpr ControlMapping kMappings[] =
-{
+constexpr ControlMapping kMappings[] = {
     {CameraControlId::Focus,                 true,  CameraControl_Focus               },
     {CameraControlId::Exposure,              true,  CameraControl_Exposure            },
     {CameraControlId::Gain,                  false, VideoProcAmp_Gain                 },
@@ -155,6 +154,7 @@ public:
             control.defaultValue = static_cast<int>(std::clamp(defaultValue, minimum, maximum));
             control.supportsAuto = (flags & kFlagAuto) != 0;
             control.supportsManual = (flags & kFlagManual) != 0 || flags == 0;
+            control.unit = mapping.id == CameraControlId::Exposure ? ControlUnit::Log2Seconds : ControlUnit::Raw;
             supported.push_back(control);
         }
         return !supported.empty();

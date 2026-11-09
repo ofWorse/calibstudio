@@ -177,6 +177,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(settings, &calib::CameraSettingsWidget::flipChanged, this, &MainWindow::onFlipChanged);
     connect(settings, &calib::CameraSettingsWidget::controlChanged, this, &MainWindow::onControlRequested);
     connect(settings, &calib::CameraSettingsWidget::resetRequested, this, &MainWindow::onResetRequested);
+    connect(settings, &calib::CameraSettingsWidget::autoTargetChanged, this, &MainWindow::onAutoTargetChanged);
     connect(filters, &calib::FilterPanel::filtersChanged, this, &MainWindow::onFiltersChanged);
 
     discovery = new calib::DiscoveryThread(5000, this);
@@ -343,12 +344,16 @@ void MainWindow::startSession(const calib::CameraInfo& camera)
     connect(capture, &calib::CaptureThread::frameReady, window,
             [session]()
             {
-                QImage frame = session->capture->takeLatestFrame();
+                QSize sourceSize;
+                QImage frame = session->capture->takeLatestFrame(&sourceSize);
                 if(!frame.isNull())
                 {
-                    session->window->setFrame(std::move(frame));
+                    session->window->setFrame(std::move(frame), sourceSize);
                 }
             });
+    connect(window, &calib::CameraWindow::displaySizeChanged, capture,
+            [session](const QSize& pixels, double pixelRatio)
+            { session->capture->setDisplaySize(pixels.width(), pixels.height(), pixelRatio); });
     connect(capture, &calib::CaptureThread::statusChanged, window,
             [this, session](const QString& message)
             {
@@ -436,6 +441,13 @@ void MainWindow::startSession(const calib::CameraInfo& camera)
                 }
             });
 
+    connect(capture, &calib::CaptureThread::autoAdjustFinished, window,
+            [this, session](calib::CameraControlId id, const calib::CameraControlState& state)
+            {
+                profiles[session->profileKey].controls[id] = state;
+                profileChanged(*session);
+            });
+
     views->addSubWindow(window);
     window->show();
     if(autoTile)
@@ -445,7 +457,7 @@ void MainWindow::startSession(const calib::CameraInfo& camera)
     views->setActiveSubWindow(window);
     activeId = camera.id;
     showActiveSession();
-    capture->start();
+    capture->start(QThread::HighPriority);
 }
 
 void MainWindow::stopSession(const std::string& id)
@@ -551,6 +563,8 @@ void MainWindow::showActiveSession(void)
 {
     CameraSession* session = activeSession();
     updatingPanels = true;
+    const auto saved = session ? profiles.find(session->profileKey) : profiles.end();
+    settings->setAutoTarget(saved != profiles.end() ? saved->second.autoTarget : 0);
     if(session && session->configured)
     {
         settings->setCamera(session->camera, session->modeIndex, session->controls, session->states,
@@ -633,6 +647,18 @@ void MainWindow::onControlRequested(calib::CameraControlId id, const calib::Came
     }
     session->capture->setControl(id, state);
     activeProfile()->controls[id] = state;
+    profileChanged(*session);
+}
+
+void MainWindow::onAutoTargetChanged(int brightness)
+{
+    CameraSession* session = activeSession();
+    if(updatingPanels || !session)
+    {
+        return;
+    }
+    session->capture->setAutoTarget(brightness);
+    activeProfile()->autoTarget = brightness;
     profileChanged(*session);
 }
 

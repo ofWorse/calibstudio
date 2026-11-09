@@ -76,7 +76,7 @@ public:
         return collapsed;
     }
 
-    void setFrame(QImage frame);
+    void setFrame(QImage frame, const QSize& sourceSize);
     void clearFrame(void);
     void setMessage(const QString& message);
     void setLinkState(calib::CameraLinkState state);
@@ -88,6 +88,7 @@ public:
 signals:
     void closeRequested(const std::string& cameraId);
     void arranged(void);
+    void displaySizeChanged(const QSize& pixels, double pixelRatio);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

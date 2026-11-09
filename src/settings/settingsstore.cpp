@@ -137,6 +137,7 @@ std::map<std::string, CameraProfile> SettingsStore::loadCameraProfiles(void) con
         CameraProfile profile;
         profile.flipHorizontal = settings->value(QStringLiteral("flip/horizontal"), false).toBool();
         profile.flipVertical = settings->value(QStringLiteral("flip/vertical"), false).toBool();
+        profile.autoTarget = settings->value(QStringLiteral("auto_target"), 0).toInt();
 
         if(settings->contains(QStringLiteral("mode/width")))
         {
@@ -158,6 +159,8 @@ std::map<std::string, CameraProfile> SettingsStore::loadCameraProfiles(void) con
             CameraControlState state;
             state.value = settings->value(name + QStringLiteral("/value")).toInt(&valid);
             state.automatic = settings->value(name + QStringLiteral("/auto"), false).toBool();
+            state.mode = state.automatic ? ControlMode::Auto : ControlMode::Manual;
+            controlModeFromKey(settings->value(name + QStringLiteral("/mode")).toString().toStdString(), &state.mode);
             if(valid)
             {
                 profile.controls[id] = state;
@@ -181,6 +184,10 @@ void SettingsStore::saveCameraProfile(const std::string& key, const QString& cam
     settings->setValue(QStringLiteral("name"), cameraName);
     settings->setValue(QStringLiteral("flip/horizontal"), profile.flipHorizontal);
     settings->setValue(QStringLiteral("flip/vertical"), profile.flipVertical);
+    if(profile.autoTarget > 0)
+    {
+        settings->setValue(QStringLiteral("auto_target"), profile.autoTarget);
+    }
 
     settings->remove(QStringLiteral("mode"));
     if(profile.hasMode)
@@ -196,6 +203,8 @@ void SettingsStore::saveCameraProfile(const std::string& key, const QString& cam
         const QString prefix = QStringLiteral("controls/") + QString::fromLatin1(toKey(id));
         settings->setValue(prefix + QStringLiteral("/value"), state.value);
         settings->setValue(prefix + QStringLiteral("/auto"), state.automatic);
+        const ControlMode mode = state.mode == ControlMode::Once ? ControlMode::Manual : state.mode;
+        settings->setValue(prefix + QStringLiteral("/mode"), QString::fromLatin1(toKey(mode)));
     }
     settings->endGroup();
 }

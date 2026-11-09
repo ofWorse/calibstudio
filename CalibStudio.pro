@@ -34,21 +34,6 @@ win32 {
 LIBS += -lz
 
 
-
-
-
-# --- Sources ------------------------------------------------------------------
-# src/app          application entry point and main window
-# src/camera       camera model, discovery interface, device and driver controls
-#   directshow/    Windows cameras (DirectShow): discovery and UVC controls
-#   gige/          GigE Vision without a vendor SDK: discovery and IP setup,
-#                  control (GVCP), GenICam XML, image stream (GVSP)
-#   generic/       fallback discovery through OpenCV
-# src/capture      discovery thread, and one capture thread per open camera
-# src/processing   image processing on frames (preview filters)
-# src/settings     settings saved between runs (camera profiles, filters)
-# src/ui           widgets
-# Includes are written relative to src/, e.g. #include "camera/cameradevice.h".
 INCLUDEPATH += $$PWD/src
 
 SOURCES += \
@@ -60,6 +45,7 @@ SOURCES += \
     src/camera/cameradevice.cpp \
     src/camera/cameraprofile.cpp \
     src/camera/gige/genicam.cpp \
+    src/camera/gige/gigecontrols.cpp \
     src/camera/gige/gigedevice.cpp \
     src/camera/gige/gigevisionprovider.cpp \
     src/camera/gige/gvcp.cpp \
@@ -69,6 +55,7 @@ SOURCES += \
     src/capture/capturethread.cpp \
     src/capture/capturetypes.cpp \
     src/capture/discoverythread.cpp \
+    src/processing/autoexposure.cpp \
     src/processing/framefilter.cpp \
     src/settings/settingsstore.cpp \
     src/ui/camerasettingswidget.cpp \
@@ -86,6 +73,7 @@ HEADERS += \
     src/camera/cameradevice.h \
     src/camera/cameraprofile.h \
     src/camera/gige/genicam.h \
+    src/camera/gige/gigecontrols.h \
     src/camera/gige/gigedevice.h \
     src/camera/gige/gigevisionprovider.h \
     src/camera/gige/gvcp.h \
@@ -95,6 +83,7 @@ HEADERS += \
     src/capture/capturethread.h \
     src/capture/capturetypes.h \
     src/capture/discoverythread.h \
+    src/processing/autoexposure.h \
     src/processing/framefilter.h \
     src/settings/settingsstore.h \
     src/ui/camerasettingswidget.h \

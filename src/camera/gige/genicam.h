@@ -61,11 +61,22 @@ public:
     bool getEnumeration(const std::string& name, std::string* entry);
     bool setEnumeration(const std::string& name, const std::string& entry);
 
+    bool getNumber(const std::string& name, double* value);
+    bool setNumber(const std::string& name, double value);
+    bool getRange(const std::string& name, double* minimum, double* maximum);
+    bool isFloat(const std::string& name) const;
+    std::vector<std::string> enumerationEntries(const std::string& name) const;
+
 private:
     const Node* find(const std::string& name);
     bool evaluate(const std::string& name, std::int64_t* value);
     bool assign(const std::string& name, std::int64_t value);
-    bool evaluateFormula(const Node& node, const std::string& formula, std::int64_t* value);
+    bool evaluateNumber(const std::string& name, double* value);
+    bool assignNumber(const std::string& name, double value);
+    bool evaluateFormula(const Node& node, const std::string& formula, const std::map<std::string, double>& extra,
+                         bool integer, double* value);
+    bool readFloatRegister(const Node& node, double* value);
+    bool writeFloatRegister(const Node& node, double value);
     bool registerAddress(const Node& node, std::uint64_t* address);
     bool registerLength(const Node& node, std::size_t* length);
     bool readRegister(const Node& node, std::int64_t* value);

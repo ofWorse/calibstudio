@@ -117,6 +117,7 @@ CameraWindow::CameraWindow(const std::string& cameraId, const QString& cameraNam
     bar->addLayout(buttons);
 
     video = new VideoWidget(content);
+    connect(video, &VideoWidget::displaySizeChanged, this, &CameraWindow::displaySizeChanged);
     video->setMessage(tr("Connecting..."));
     layout->addWidget(titleBar);
     layout->addWidget(video, 1);
@@ -140,11 +141,11 @@ CameraWindow::CameraWindow(const std::string& cameraId, const QString& cameraNam
     updateButtons();
 }
 
-void CameraWindow::setFrame(QImage frame)
+void CameraWindow::setFrame(QImage frame, const QSize& sourceSize)
 {
-    if(frame.size() != frameSize)
+    if(sourceSize != frameSize)
     {
-        frameSize = frame.size();
+        frameSize = sourceSize;
         updateTitle();
     }
     video->setFrame(std::move(frame));

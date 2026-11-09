@@ -26,10 +26,30 @@ enum class CameraControlId
     Focus,
 };
 
+enum class ControlMode
+{
+    Manual,
+    Once,
+    Continuous,
+    Auto,
+};
+
+enum class ControlUnit
+{
+    Raw,
+    Log2Seconds,
+    Microseconds,
+    TenthDecibel,
+};
+
 const char* toString(CameraControlId id);
 const char* toKey(CameraControlId id);
 bool controlIdFromKey(const std::string& key, CameraControlId* id);
+const char* toString(ControlMode mode);
+const char* toKey(ControlMode mode);
+bool controlModeFromKey(const std::string& key, ControlMode* mode);
 std::string formatControlValue(CameraControlId id, int value);
+std::string formatControlValue(CameraControlId id, ControlUnit unit, int value);
 
 
 struct CameraControlInfo
@@ -41,13 +61,18 @@ struct CameraControlInfo
     int defaultValue = 0;
     bool supportsAuto = false;
     bool supportsManual = true;
+    ControlUnit unit = ControlUnit::Raw;
 };
 
 struct CameraControlState
 {
     int value = 0;
     bool automatic = false;
+    ControlMode mode = ControlMode::Manual;
 };
+
+// Exposure and gain can also be adjusted by CalibStudio itself (Once / Continuous).
+bool supportsSoftwareAuto(const CameraControlInfo& control);
 
 
 class ICameraControls

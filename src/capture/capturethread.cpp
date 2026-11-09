@@ -10,7 +10,9 @@
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <utility>
 
 #ifdef _WIN32
@@ -28,41 +30,69 @@ namespace
 
 constexpr int kReconnectIntervalMs = 2000;
 constexpr int kMaxConsecutiveReadFailures = 50;
+constexpr int kAutoPollIntervalMs = 1000;
 
 
-QImage toOwnedImage(const QImage& view, bool flipX, bool flipY)
-{
-    return (flipX || flipY) ? view.mirrored(flipX, flipY) : view.copy();
-}
-
-QImage matToQImage(const cv::Mat& mat, bool flipX, bool flipY)
+QImage renderForDisplay(const cv::Mat& mat, int maxWidth, int maxHeight, bool flipX, bool flipY)
 {
     if(mat.empty())
     {
         return {};
     }
-    const int step = static_cast<int>(mat.step);
-    switch(mat.type())
+    cv::Mat source = mat;
+    if(mat.depth() == CV_16U)
     {
-    case CV_8UC3:
-#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
-        return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_BGR888), flipX, flipY);
-#else
-    {
-        cv::Mat rgb;
-        cv::cvtColor(mat, rgb, cv::COLOR_BGR2RGB);
-        return toOwnedImage(QImage(rgb.data, rgb.cols, rgb.rows, static_cast<int>(rgb.step), QImage::Format_RGB888),
-                            flipX, flipY);
+        mat.convertTo(source, CV_8U, 1.0 / 256.0);
     }
-#endif
-    case CV_8UC1:
-        return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_Grayscale8), flipX, flipY);
-    case CV_8UC4:
-        return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_ARGB32), flipX, flipY);
-    case CV_16UC1:
-        return toOwnedImage(QImage(mat.data, mat.cols, mat.rows, step, QImage::Format_Grayscale16), flipX, flipY);
+    else if(mat.depth() != CV_8U)
+    {
+        return {};
+    }
+
+    int width = source.cols;
+    int height = source.rows;
+    if(maxWidth > 0 && maxHeight > 0)
+    {
+        const double scale = std::min(static_cast<double>(maxWidth) / width, static_cast<double>(maxHeight) / height);
+        width = std::max(1, static_cast<int>(std::lround(width * scale)));
+        height = std::max(1, static_cast<int>(std::lround(height * scale)));
+    }
+
+    cv::Mat scaled = source;
+    const int factor = std::min(source.cols / width, source.rows / height);
+    if(factor >= 2)
+    {
+        const cv::Mat cropped = source(cv::Rect(0, 0, source.cols - source.cols % factor,
+                                                source.rows - source.rows % factor));
+        cv::resize(cropped, scaled, cv::Size(cropped.cols / factor, cropped.rows / factor), 0.0, 0.0, cv::INTER_AREA);
+    }
+    if(width != scaled.cols || height != scaled.rows)
+    {
+        cv::resize(scaled, scaled, cv::Size(width, height), 0.0, 0.0, cv::INTER_LINEAR);
+    }
+
+    QImage image(width, height, QImage::Format_RGB32);
+    if(image.isNull())
+    {
+        return {};
+    }
+    cv::Mat target(height, width, CV_8UC4, image.bits(), static_cast<size_t>(image.bytesPerLine()));
+    switch(scaled.channels())
+    {
+    case 1:  cv::cvtColor(scaled, target, cv::COLOR_GRAY2BGRA); break;
+    case 3:  cv::cvtColor(scaled, target, cv::COLOR_BGR2BGRA); break;
+    case 4:  scaled.copyTo(target); break;
     default: return {};
     }
+    if(target.data != image.bits())
+    {
+        return {};
+    }
+    if(flipX || flipY)
+    {
+        cv::flip(target, target, flipX && flipY ? -1 : (flipX ? 1 : 0));
+    }
+    return image;
 }
 
 QString qs(const std::string& text)
@@ -100,11 +130,22 @@ void CaptureThread::stop(void)
     }
 }
 
-QImage CaptureThread::takeLatestFrame(void)
+QImage CaptureThread::takeLatestFrame(QSize* sourceSize)
 {
     QMutexLocker lock(&frameMutex);
     framePending = false;
+    if(sourceSize)
+    {
+        *sourceSize = latestSourceSize;
+    }
     return std::exchange(latestFrame, QImage());
+}
+
+void CaptureThread::setDisplaySize(int width, int height, double pixelRatio)
+{
+    displayWidth = width;
+    displayHeight = height;
+    displayRatio = pixelRatio > 0.0 ? pixelRatio : 1.0;
 }
 
 void CaptureThread::setFlip(bool horizontal, bool vertical)
@@ -126,6 +167,12 @@ void CaptureThread::resetControls(void)
     pendingCommands.controls.clear();
     pendingCommands.resetControls = true;
     commandsPending = true;
+}
+
+void CaptureThread::setAutoTarget(int brightness)
+{
+    autoTarget = brightness;
+    autoTargetChanged = true;
 }
 
 void CaptureThread::setFilterSettings(const FilterSettings& settings)
@@ -179,6 +226,7 @@ void CaptureThread::run(void)
                 pendingCommands = PendingCommands{};
                 commandsPending = false;
             }
+            autoExposure.stopAll();
             restoreProfile(device);
             announceCamera(device);
 
@@ -237,6 +285,8 @@ bool CaptureThread::openCamera(CameraDevice& device, QString* error)
 QString CaptureThread::streamUntilStopped(CameraDevice& device)
 {
     cv::Mat frame;
+    QElapsedTimer autoPollTimer;
+    autoPollTimer.start();
     int consecutiveFailures = 0;
     int framesInWindow = 0;
     std::chrono::steady_clock::duration filterTimeInWindow{};
@@ -270,6 +320,20 @@ QString CaptureThread::streamUntilStopped(CameraDevice& device)
 
         consecutiveFailures = 0;
 
+        if(autoTargetChanged.exchange(false))
+        {
+            autoExposure.setTarget(autoTarget.load());
+        }
+        if(autoExposure.isActive())
+        {
+            runAutoExposure(device, frame);
+        }
+        if(autoPollTimer.elapsed() >= kAutoPollIntervalMs)
+        {
+            autoPollTimer.restart();
+            reportCameraAuto(device);
+        }
+
         if(filtersChanged.exchange(false))
         {
             std::lock_guard<std::mutex> lock(filterMutex);
@@ -298,11 +362,13 @@ QString CaptureThread::streamUntilStopped(CameraDevice& device)
 
 void CaptureThread::publishFrame(const cv::Mat& frame)
 {
-    QImage image = matToQImage(frame, flipHorizontal.load(), flipVertical.load());
+    QImage image = renderForDisplay(frame, displayWidth.load(), displayHeight.load(), flipHorizontal.load(),
+                                    flipVertical.load());
     if(image.isNull())
     {
         return;
     }
+    image.setDevicePixelRatio(displayRatio.load());
 
     {
         QMutexLocker lock(&frameMutex);
@@ -311,6 +377,7 @@ void CaptureThread::publishFrame(const cv::Mat& frame)
             ++droppedFrames;
         }
         latestFrame = std::move(image);
+        latestSourceSize = QSize(frame.cols, frame.rows);
     }
 
     if(!framePending.exchange(true))
@@ -335,6 +402,9 @@ void CaptureThread::announceCamera(const CameraDevice& device)
         {
             CameraControlState state{control.defaultValue, false};
             controls->get(control.id, &state);
+            state.mode = autoExposure.isActive(control.id)
+                ? autoExposure.modeOf(control.id)
+                : (state.automatic ? ControlMode::Auto : ControlMode::Manual);
             controlInfos.push_back(control);
             controlStates.push_back(state);
         }
@@ -364,6 +434,10 @@ void CaptureThread::restoreProfile(CameraDevice& device)
 
     flipHorizontal = saved.flipHorizontal;
     flipVertical = saved.flipVertical;
+    if(saved.autoTarget > 0)
+    {
+        autoExposure.setTarget(saved.autoTarget);
+    }
 
     int restored = 0;
     if(ICameraControls* controls = device.getControls())
@@ -375,9 +449,16 @@ void CaptureThread::restoreProfile(CameraDevice& device)
             {
                 continue;
             }
-            if(controls->set(control.id, value->second))
+            CameraControlState state = value->second;
+            const bool software = state.mode == ControlMode::Continuous && supportsSoftwareAuto(control);
+            state.automatic = state.mode == ControlMode::Auto || (state.automatic && !software);
+            if(controls->set(control.id, state))
             {
                 ++restored;
+                if(software)
+                {
+                    autoExposure.start(control, state.value, ControlMode::Continuous);
+                }
             }
             else
             {
@@ -430,32 +511,117 @@ bool CaptureThread::applyPendingCommands(CameraDevice& device, QString* failure)
         return true;
     }
 
-    const auto applyAndReport = [this, controls](CameraControlId id, const CameraControlState& state)
-    {
-        if(!controls->set(id, state))
-        {
-            qCWarning(lcCapture) << "Camera rejected" << toString(id) << "=" << state.value
-                                 << (state.automatic ? "(auto)" : "");
-        }
-        CameraControlState actual;
-        if(controls->get(id, &actual))
-        {
-            emit controlChanged(id, actual);
-        }
-    };
-
     if(commands.resetControls)
     {
+        autoExposure.stopAll();
         for(const CameraControlInfo& control : controls->list())
         {
-            applyAndReport(control.id, CameraControlState{control.defaultValue, control.supportsAuto});
+            applyControl(controls, control.id,
+                         CameraControlState{control.defaultValue, control.supportsAuto,
+                                            control.supportsAuto ? ControlMode::Auto : ControlMode::Manual});
         }
     }
     for(const auto& [id, state] : commands.controls)
     {
-        applyAndReport(id, state);
+        applyControl(controls, id, state);
     }
     return true;
+}
+
+void CaptureThread::applyControl(ICameraControls* controls, CameraControlId id, const CameraControlState& state)
+{
+    const std::vector<CameraControlInfo> infos = controls->list();
+    const auto info = std::find_if(infos.begin(), infos.end(),
+                                   [id](const CameraControlInfo& control) { return control.id == id; });
+    if(info == infos.end())
+    {
+        return;
+    }
+
+    if((state.mode == ControlMode::Once || state.mode == ControlMode::Continuous) && supportsSoftwareAuto(*info))
+    {
+        CameraControlState current{state.value, false};
+        controls->get(id, &current);
+        controls->set(id, CameraControlState{current.value, false});
+        autoExposure.start(*info, current.value, state.mode);
+        emit controlChanged(id, CameraControlState{current.value, false, state.mode});
+        return;
+    }
+
+    autoExposure.stop(id);
+    CameraControlState request = state;
+    request.automatic = state.mode == ControlMode::Auto || state.automatic;
+    CameraControlState before;
+    if(!request.automatic && controls->get(id, &before) && before.automatic)
+    {
+        request.value = before.value;
+    }
+    if(!controls->set(id, request))
+    {
+        qCWarning(lcCapture) << "Camera rejected" << toString(id) << "=" << request.value
+                             << (request.automatic ? "(auto)" : "");
+    }
+    CameraControlState actual;
+    if(controls->get(id, &actual))
+    {
+        actual.mode = actual.automatic ? ControlMode::Auto : ControlMode::Manual;
+        emit controlChanged(id, actual);
+    }
+}
+
+void CaptureThread::reportCameraAuto(CameraDevice& device)
+{
+    // In the camera's own Auto mode exposure and gain change without us:
+    // read them now and then so the panel shows the real values.
+    ICameraControls* controls = device.getControls();
+    if(!controls)
+    {
+        return;
+    }
+    for(const CameraControlId id : {CameraControlId::Exposure, CameraControlId::Gain})
+    {
+        CameraControlState state;
+        if(autoExposure.isActive(id) || !controls->get(id, &state) || !state.automatic)
+        {
+            continue;
+        }
+        state.mode = ControlMode::Auto;
+        const auto last = reportedAutoValues.find(id);
+        if(last == reportedAutoValues.end() || last->second != state.value)
+        {
+            reportedAutoValues[id] = state.value;
+            emit controlChanged(id, state);
+        }
+    }
+}
+
+void CaptureThread::runAutoExposure(CameraDevice& device, const cv::Mat& frame)
+{
+    ICameraControls* controls = device.getControls();
+    if(!controls)
+    {
+        autoExposure.stopAll();
+        return;
+    }
+
+    const AutoExposure::Result result = autoExposure.update(frame);
+    for(const auto& [id, value] : result.changes)
+    {
+        controls->set(id, CameraControlState{value, false});
+        if(autoExposure.isActive(id))
+        {
+            emit controlChanged(id, CameraControlState{value, false, autoExposure.modeOf(id)});
+        }
+    }
+    for(const CameraControlId id : result.finished)
+    {
+        CameraControlState state;
+        controls->get(id, &state);
+        state.automatic = false;
+        state.mode = ControlMode::Manual;
+        emit controlChanged(id, state);
+        emit autoAdjustFinished(id, state);
+    }
 }
 
 void CaptureThread::sleepInterruptible(int milliseconds)

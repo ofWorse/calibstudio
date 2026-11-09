@@ -29,8 +29,12 @@ public:
         return {960, 540};
     }
 
+signals:
+    void displaySizeChanged(const QSize& pixels, double pixelRatio);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 };
 
 

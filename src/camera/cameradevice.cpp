@@ -1,5 +1,6 @@
 #include "camera/cameradevice.h"
 
+#include "camera/gige/gigecontrols.h"
 #include "camera/gige/gigedevice.h"
 #include "camera/gige/gvsp.h"
 
@@ -214,6 +215,7 @@ bool CameraDevice::openGigE(const CameraInfo& info, std::string* error)
     activeMode.fourcc = gvsp::pixelFormatName(device->getPixelFormat());
     activeMode.compressed = false;
     gige = std::move(device);
+    controls = createGigEControls(gige->getNodeMap());
     return true;
 }
 

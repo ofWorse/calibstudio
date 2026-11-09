@@ -3,6 +3,7 @@
 
 #include <opencv2/core/mat.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -69,9 +70,9 @@ private:
     std::vector<std::uint8_t> image;
     std::vector<bool> received;
     std::size_t receivedCount = 0;
-    std::uint64_t incompleteFrames = 0;
-    std::uint64_t lostPackets = 0;
-    std::uint64_t packets = 0;
+    std::atomic<std::uint64_t> incompleteFrames{0};
+    std::atomic<std::uint64_t> lostPackets{0};
+    std::atomic<std::uint64_t> packets{0};
 
 public:
     enum class Result
@@ -83,6 +84,7 @@ public:
     void setPacketSize(std::size_t packetSize);
     void reset(void);
     Result push(const std::uint8_t* packet, std::size_t size);
+    void swapImage(std::vector<std::uint8_t>& other);
 
     const std::vector<std::uint8_t>& getImage(void) const
     {

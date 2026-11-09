@@ -31,6 +31,7 @@ struct GigEVisionProvider::Probe
     std::string interfaceName;
     std::uint32_t address = 0;
     std::uint32_t netmask = 0;
+    int mtu = 0;
 };
 
 struct GigEVisionProvider::Reply
@@ -234,6 +235,7 @@ std::vector<CameraInfo> GigEVisionProvider::enumerate(std::string* error)
         info.deviceIp = device.ip;
         info.hostIp = probe.address;
         info.hostNetmask = probe.netmask;
+        info.hostMtu = probe.mtu > 0 ? static_cast<std::uint32_t>(probe.mtu) : 0;
         info.streamable = inSubnet(device.ip, probe.address, probe.netmask) && device.ip != probe.address;
         if(info.streamable)
         {
@@ -276,6 +278,7 @@ std::vector<GigEVisionProvider::Probe> GigEVisionProvider::openProbes(void)
             probe.interfaceName = iface.humanReadableName().toStdString();
             probe.address = entry.ip().toIPv4Address();
             probe.netmask = entry.netmask().toIPv4Address();
+            probe.mtu = iface.maximumTransmissionUnit();
             if(probe.socket->bind(entry.ip(), 0))
             {
                 probes.push_back(std::move(probe));

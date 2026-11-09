@@ -229,6 +229,11 @@ FrameAssembler::Result FrameAssembler::push(const std::uint8_t* packet, std::siz
         {
             received[index] = true;
             ++receivedCount;
+            if(receivedCount == received.size())
+            {
+                inBlock = false;
+                return Result::Frame;
+            }
         }
         return Result::None;
     }
@@ -251,6 +256,11 @@ FrameAssembler::Result FrameAssembler::push(const std::uint8_t* packet, std::siz
 
     default: return Result::None;
     }
+}
+
+void FrameAssembler::swapImage(std::vector<std::uint8_t>& other)
+{
+    image.swap(other);
 }
 
 void FrameAssembler::startBlock(std::uint16_t id, const std::uint8_t* leader, std::size_t size)

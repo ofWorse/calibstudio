@@ -25,7 +25,6 @@ QString rgba(const QColor& color, int alpha)
     return QStringLiteral("rgba(%1, %2, %3, %4)").arg(color.red()).arg(color.green()).arg(color.blue()).arg(alpha);
 }
 
-// Style sheets take images only from files.
 QString glyphFolder(void)
 {
     static QTemporaryDir folder;

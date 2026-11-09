@@ -62,6 +62,75 @@ bool controlIdFromKey(const std::string& key, CameraControlId* id)
     return false;
 }
 
+const char* toString(ControlMode mode)
+{
+    switch(mode)
+    {
+    case ControlMode::Manual:     return "Manual";
+    case ControlMode::Once:       return "Once";
+    case ControlMode::Continuous: return "Continuous";
+    case ControlMode::Auto:       return "Auto";
+    }
+    return "Manual";
+}
+
+const char* toKey(ControlMode mode)
+{
+    switch(mode)
+    {
+    case ControlMode::Manual:     return "manual";
+    case ControlMode::Once:       return "once";
+    case ControlMode::Continuous: return "continuous";
+    case ControlMode::Auto:       return "auto";
+    }
+    return "manual";
+}
+
+bool controlModeFromKey(const std::string& key, ControlMode* mode)
+{
+    for(const ControlMode candidate :
+        {ControlMode::Manual, ControlMode::Once, ControlMode::Continuous, ControlMode::Auto})
+    {
+        if(key == toKey(candidate))
+        {
+            *mode = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool supportsSoftwareAuto(const CameraControlInfo& control)
+{
+    return control.supportsManual && (control.id == CameraControlId::Exposure || control.id == CameraControlId::Gain);
+}
+
+std::string formatControlValue(CameraControlId id, ControlUnit unit, int value)
+{
+    char buffer[32];
+    switch(unit)
+    {
+    case ControlUnit::Microseconds:
+        if(value >= 1000000)
+        {
+            std::snprintf(buffer, sizeof(buffer), "%.2f s", value / 1e6);
+        }
+        else if(value >= 1000)
+        {
+            std::snprintf(buffer, sizeof(buffer), "%.2f ms", value / 1e3);
+        }
+        else
+        {
+            std::snprintf(buffer, sizeof(buffer), "%d \u00b5s", value);
+        }
+        return buffer;
+    case ControlUnit::TenthDecibel: std::snprintf(buffer, sizeof(buffer), "%.1f dB", value / 10.0); return buffer;
+    case ControlUnit::Log2Seconds:  return formatControlValue(CameraControlId::Exposure, value);
+    case ControlUnit::Raw:          break;
+    }
+    return formatControlValue(id == CameraControlId::Exposure ? CameraControlId::Brightness : id, value);
+}
+
 std::string formatControlValue(CameraControlId id, int value)
 {
     char buffer[32];

@@ -11,6 +11,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace calib
@@ -27,9 +28,16 @@ int snapToStep(const CameraControlInfo& control, int value)
     return std::min(control.minimum + steps * control.step, control.maximum);
 }
 
-QString valueText(CameraControlId id, int value)
+constexpr int kLogSliderSteps = 1000;
+
+QString valueText(const CameraControlInfo& control, int value)
 {
-    return QString::fromStdString(formatControlValue(id, value));
+    return QString::fromStdString(formatControlValue(control.id, control.unit, value));
+}
+
+QString targetText(int brightness)
+{
+    return QStringLiteral("%1 %").arg(qRound(brightness * 100.0 / 255.0));
 }
 
 QString tooltipFor(CameraControlId id)
@@ -41,9 +49,13 @@ QString tooltipFor(CameraControlId id)
                            "the focal length must not change between captures.");
     case CameraControlId::Exposure:
         return QObject::tr("Shutter time. A long exposure brightens a dark scene but "
-                           "limits the frame rate (1/30 s or shorter keeps 30 fps).");
+                           "limits the frame rate (1/30 s or shorter keeps 30 fps).\n"
+                           "Once: adjust to the target brightness, then keep the value.\n"
+                           "Continuous: keep adjusting while the scene changes.\n"
+                           "Auto: the camera's own automatic mode.");
     case CameraControlId::Gain:
-        return QObject::tr("Amplifies the sensor signal: a brighter image at the cost of more noise.");
+        return QObject::tr("Amplifies the sensor signal: a brighter image at the cost of more noise.\n"
+                           "With exposure, gain is raised only when exposure reaches its limit.");
     case CameraControlId::WhiteBalance: return QObject::tr("Colour temperature of the light source, in Kelvin.");
     case CameraControlId::BacklightCompensation:
         return QObject::tr("Brightens the subject when a bright light is behind it.");
@@ -118,6 +130,17 @@ CameraSettingsWidget::CameraSettingsWidget(QWidget* parent)
     clearCamera();
 }
 
+void CameraSettingsWidget::setAutoTarget(int brightness)
+{
+    autoTarget = brightness > 0 ? brightness : 110;
+    if(targetSlider)
+    {
+        const QSignalBlocker blocker(targetSlider);
+        targetSlider->setValue(autoTarget);
+        targetLabel->setText(targetText(autoTarget));
+    }
+}
+
 void CameraSettingsWidget::clearCamera(void)
 {
     modeCombo->clear();
@@ -157,6 +180,7 @@ void CameraSettingsWidget::setCamera(const CameraInfo& camera, int modeIndex,
         QGroupBox* box = nullptr;
         QGridLayout* grid = nullptr;
         int gridRow = 0;
+        bool softwareAuto = false;
         for(const CameraControlId id : group.ids)
         {
             for(int i = 0; i < controls.size(); ++i)
@@ -173,8 +197,13 @@ void CameraSettingsWidget::setCamera(const CameraInfo& camera, int modeIndex,
                     controlsLayout->addWidget(box);
                 }
                 const CameraControlState state = i < states.size() ? states.at(i) : CameraControlState{};
-                addControlRow(grid, gridRow++, controls.at(i), state);
+                gridRow += addControlRow(grid, gridRow, controls.at(i), state);
+                softwareAuto = softwareAuto || supportsSoftwareAuto(controls.at(i));
             }
+        }
+        if(softwareAuto)
+        {
+            addTargetRow(grid, gridRow++);
         }
     }
 
@@ -195,51 +224,100 @@ void CameraSettingsWidget::updateControl(CameraControlId id, const CameraControl
 void CameraSettingsWidget::removeControlRows(void)
 {
     rows.clear();
+    targetSlider = nullptr;
+    targetLabel = nullptr;
     const QList<QWidget*> children = controlsHost->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
     qDeleteAll(children);
 }
 
-void CameraSettingsWidget::addControlRow(QGridLayout* grid, int gridRow, const CameraControlInfo& control,
-                                         const CameraControlState& state)
+int CameraSettingsWidget::addControlRow(QGridLayout* grid, int gridRow, const CameraControlInfo& control,
+                                        const CameraControlState& state)
 {
     QWidget* box = grid->parentWidget();
     const CameraControlId id = control.id;
 
     ControlRow row;
     row.info = control;
+    row.logScale = control.unit == ControlUnit::Microseconds && control.minimum > 0
+        && control.maximum > 100 * control.minimum;
 
     auto* nameLabel = new QLabel(QString::fromLatin1(toString(id)), box);
     nameLabel->setToolTip(tooltipFor(id));
 
     row.slider = new QSlider(Qt::Horizontal, box);
-    row.slider->setRange(control.minimum, control.maximum);
-    row.slider->setSingleStep(control.step);
-    row.slider->setPageStep(std::max(control.step, (control.maximum - control.minimum) / 10));
+    if(row.logScale)
+    {
+        row.slider->setRange(0, kLogSliderSteps);
+        row.slider->setPageStep(kLogSliderSteps / 10);
+    }
+    else
+    {
+        row.slider->setRange(control.minimum, control.maximum);
+        row.slider->setSingleStep(control.step);
+        row.slider->setPageStep(std::max(control.step, (control.maximum - control.minimum) / 10));
+    }
     row.slider->setToolTip(tooltipFor(id));
 
     row.valueLabel = new QLabel(box);
     row.valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    row.valueLabel->setMinimumWidth(row.valueLabel->fontMetrics().horizontalAdvance(QStringLiteral("1/16384 s")));
+    row.valueLabel->setMinimumWidth(row.valueLabel->fontMetrics().horizontalAdvance(QStringLiteral("999.99 ms")));
 
-    grid->addWidget(nameLabel, gridRow, 0);
-    grid->addWidget(row.slider, gridRow, 1);
-    grid->addWidget(row.valueLabel, gridRow, 2);
+    int usedRows = 1;
+    if(supportsSoftwareAuto(control))
+    {
+        grid->addWidget(nameLabel, gridRow, 0);
+        grid->addWidget(row.slider, gridRow + 1, 0, 1, 2);
+        grid->addWidget(row.valueLabel, gridRow + 1, 2, 1, 2);
+        usedRows = 2;
+    }
+    else
+    {
+        grid->addWidget(nameLabel, gridRow, 0);
+        grid->addWidget(row.slider, gridRow, 1);
+        grid->addWidget(row.valueLabel, gridRow, 2);
+    }
 
-    if(control.supportsAuto)
+    if(supportsSoftwareAuto(control))
+    {
+        row.modeBox = new QComboBox(box);
+        for(const ControlMode mode :
+            {ControlMode::Manual, ControlMode::Once, ControlMode::Continuous, ControlMode::Auto})
+        {
+            if(mode != ControlMode::Auto || control.supportsAuto)
+            {
+                row.modeBox->addItem(tr(toString(mode)), static_cast<int>(mode));
+            }
+        }
+        row.modeBox->setToolTip(tooltipFor(id));
+        grid->addWidget(row.modeBox, gridRow, 1, 1, 3);
+    }
+    else if(control.supportsAuto)
     {
         row.autoBox = new QCheckBox(id == CameraControlId::Focus ? tr("Autofocus") : tr("Auto"), box);
         grid->addWidget(row.autoBox, gridRow, 3);
     }
 
     connect(row.slider, &QSlider::valueChanged, this,
-            [this, id](int value)
+            [this, id](int position)
             {
                 ControlRow& current = rows.at(id);
-                const int snapped = snapToStep(current.info, value);
-                current.valueLabel->setText(valueText(id, snapped));
-                emit controlChanged(id, CameraControlState{snapped, false});
+                const int value = snapToStep(current.info, valueAtPosition(current, position));
+                current.value = value;
+                current.valueLabel->setText(valueText(current.info, value));
+                emit controlChanged(id, CameraControlState{value, false, ControlMode::Manual});
             });
 
+    if(row.modeBox)
+    {
+        connect(row.modeBox, QOverload<int>::of(&QComboBox::activated), this,
+                [this, id](int index)
+                {
+                    ControlRow& current = rows.at(id);
+                    const auto mode = static_cast<ControlMode>(current.modeBox->itemData(index).toInt());
+                    current.slider->setEnabled(mode == ControlMode::Manual);
+                    emit controlChanged(id, CameraControlState{current.value, mode == ControlMode::Auto, mode});
+                });
+    }
     if(row.autoBox)
     {
         connect(row.autoBox, &QCheckBox::toggled, this,
@@ -247,26 +325,89 @@ void CameraSettingsWidget::addControlRow(QGridLayout* grid, int gridRow, const C
                 {
                     ControlRow& current = rows.at(id);
                     current.slider->setEnabled(current.info.supportsManual && !automatic);
-                    emit controlChanged(
-                        id, CameraControlState{snapToStep(current.info, current.slider->value()), automatic});
+                    emit controlChanged(id,
+                                        CameraControlState{current.value, automatic,
+                                                           automatic ? ControlMode::Auto : ControlMode::Manual});
                 });
     }
 
     ControlRow& stored = rows[id] = row;
     showState(stored, state);
+    return usedRows;
+}
+
+void CameraSettingsWidget::addTargetRow(QGridLayout* grid, int gridRow)
+{
+    QWidget* box = grid->parentWidget();
+    auto* nameLabel = new QLabel(tr("Target"), box);
+    const QString tip = tr("Brightness that Once and Continuous aim for (mean of the picture).");
+    nameLabel->setToolTip(tip);
+    targetSlider = new QSlider(Qt::Horizontal, box);
+    targetSlider->setRange(20, 230);
+    targetSlider->setToolTip(tip);
+    targetLabel = new QLabel(box);
+    targetLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    grid->addWidget(nameLabel, gridRow, 0);
+    grid->addWidget(targetSlider, gridRow, 1);
+    grid->addWidget(targetLabel, gridRow, 2, 1, 2);
+
+    setAutoTarget(autoTarget);
+    connect(targetSlider, &QSlider::valueChanged, this,
+            [this](int brightness)
+            {
+                autoTarget = brightness;
+                targetLabel->setText(targetText(brightness));
+                emit autoTargetChanged(brightness);
+            });
 }
 
 void CameraSettingsWidget::showState(ControlRow& row, const CameraControlState& state)
 {
     const QSignalBlocker sliderBlocker(row.slider);
-    row.slider->setValue(state.value);
-    row.valueLabel->setText(valueText(row.info.id, state.value));
+    row.value = state.value;
+    row.slider->setValue(sliderPosition(row, state.value));
+    row.valueLabel->setText(valueText(row.info, state.value));
+
+    ControlMode mode = state.mode;
+    if(mode == ControlMode::Manual && state.automatic)
+    {
+        mode = ControlMode::Auto;
+    }
+    if(row.modeBox)
+    {
+        const QSignalBlocker modeBlocker(row.modeBox);
+        const int index = row.modeBox->findData(static_cast<int>(mode));
+        row.modeBox->setCurrentIndex(index >= 0 ? index : 0);
+        row.slider->setEnabled(row.info.supportsManual && mode == ControlMode::Manual);
+        return;
+    }
     if(row.autoBox)
     {
         const QSignalBlocker autoBlocker(row.autoBox);
         row.autoBox->setChecked(state.automatic);
     }
     row.slider->setEnabled(row.info.supportsManual && !(state.automatic && row.autoBox));
+}
+
+int CameraSettingsWidget::sliderPosition(const ControlRow& row, int value) const
+{
+    if(!row.logScale)
+    {
+        return value;
+    }
+    const double span = std::log(static_cast<double>(row.info.maximum) / row.info.minimum);
+    const double share = std::log(std::max(value, row.info.minimum) / static_cast<double>(row.info.minimum)) / span;
+    return static_cast<int>(std::lround(std::clamp(share, 0.0, 1.0) * kLogSliderSteps));
+}
+
+int CameraSettingsWidget::valueAtPosition(const ControlRow& row, int position) const
+{
+    if(!row.logScale)
+    {
+        return position;
+    }
+    const double ratio = static_cast<double>(row.info.maximum) / row.info.minimum;
+    return static_cast<int>(std::lround(row.info.minimum * std::pow(ratio, position / double(kLogSliderSteps))));
 }
 
 

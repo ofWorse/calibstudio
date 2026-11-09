@@ -32,6 +32,9 @@ private:
         QSlider* slider = nullptr;
         QLabel* valueLabel = nullptr;
         QCheckBox* autoBox = nullptr;
+        QComboBox* modeBox = nullptr;
+        bool logScale = false;
+        int value = 0;
     };
 
     QComboBox* modeCombo = nullptr;
@@ -42,6 +45,9 @@ private:
     QLabel* noControlsLabel = nullptr;
     QPushButton* resetButton = nullptr;
     std::map<CameraControlId, ControlRow> rows;
+    QSlider* targetSlider = nullptr;
+    QLabel* targetLabel = nullptr;
+    int autoTarget = 110;
 
 public:
     explicit CameraSettingsWidget(QWidget* parent = nullptr);
@@ -50,18 +56,23 @@ public:
                    const QVector<calib::CameraControlState>& states, bool flipHorizontal, bool flipVertical);
     void updateControl(calib::CameraControlId id, const calib::CameraControlState& state);
     void clearCamera(void);
+    void setAutoTarget(int brightness);
 
 signals:
     void modeRequested(int modeIndex);
     void flipChanged(bool horizontal, bool vertical);
     void controlChanged(calib::CameraControlId id, const calib::CameraControlState& state);
     void resetRequested(void);
+    void autoTargetChanged(int brightness);
 
 private:
     void removeControlRows(void);
-    void addControlRow(QGridLayout* grid, int gridRow, const CameraControlInfo& control,
-                       const CameraControlState& state);
+    int addControlRow(QGridLayout* grid, int gridRow, const CameraControlInfo& control,
+                      const CameraControlState& state);
+    void addTargetRow(QGridLayout* grid, int gridRow);
     void showState(ControlRow& row, const CameraControlState& state);
+    int sliderPosition(const ControlRow& row, int value) const;
+    int valueAtPosition(const ControlRow& row, int position) const;
 };
 
 

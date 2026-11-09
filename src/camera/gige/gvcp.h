@@ -49,6 +49,7 @@ constexpr std::uint32_t kHeartbeatTimeout = 0x0938;
 constexpr std::uint32_t kControlChannelPrivilege = 0x0A00;
 constexpr std::uint32_t kStreamChannelPort0 = 0x0D00;
 constexpr std::uint32_t kStreamChannelPacketSize0 = 0x0D04;
+constexpr std::uint32_t kStreamChannelPacketDelay0 = 0x0D08;
 constexpr std::uint32_t kStreamChannelDestination0 = 0x0D18;
 constexpr std::uint32_t kStreamChannelSourcePort0 = 0x0D1C;
 

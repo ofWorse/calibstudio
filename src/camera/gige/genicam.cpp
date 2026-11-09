@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <stdlib.h>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 
@@ -64,24 +66,47 @@ bool parseNumber(const std::string& text, std::int64_t* value)
 }
 
 
-// Integer expression evaluator for SwissKnife formulas: C-like operators plus
-// GenICam's "=" (equal), "<>" (not equal) and "**" (power).
+bool parseReal(const std::string& text, double* value)
+{
+    const std::string t = trim(text);
+    if(t.empty())
+    {
+        return false;
+    }
+    std::int64_t integer = 0;
+    if(parseNumber(t, &integer))
+    {
+        *value = static_cast<double>(integer);
+        return true;
+    }
+    char* end = nullptr;
+    errno = 0;
+    *value = strtod(t.c_str(), &end);
+    return errno == 0 && end == t.c_str() + t.size();
+}
+
+
+// SwissKnife / Converter formulas: C-like operators plus GenICam's "="
+// (equal), "<>" (not equal), "**" (power) and functions such as ABS, SQRT,
+// ROUND. Integer mode (IntSwissKnife) truncates divisions.
 class FormulaParser
 {
 private:
     const std::string& text;
     std::size_t position = 0;
-    std::function<bool(const std::string&, std::int64_t*)> lookup;
+    std::function<bool(const std::string&, double*)> lookup;
+    bool integer;
     bool ok = true;
 
 public:
-    FormulaParser(const std::string& text, std::function<bool(const std::string&, std::int64_t*)> lookup)
+    FormulaParser(const std::string& text, std::function<bool(const std::string&, double*)> lookup, bool integer)
         : text(text),
-          lookup(std::move(lookup))
+          lookup(std::move(lookup)),
+          integer(integer)
     {
     }
 
-    bool parse(std::int64_t* value)
+    bool parse(double* value)
     {
         *value = ternary();
         skipSpace();
@@ -89,6 +114,11 @@ public:
     }
 
 private:
+    static std::int64_t toInt(double value)
+    {
+        return static_cast<std::int64_t>(std::llround(value));
+    }
+
     void skipSpace(void)
     {
         while(position < text.size() && std::isspace(static_cast<unsigned char>(text[position])))
@@ -120,78 +150,78 @@ private:
         return accept(token);
     }
 
-    std::int64_t ternary(void)
+    double ternary(void)
     {
-        const std::int64_t condition = logicalOr();
+        const double condition = logicalOr();
         if(accept("?"))
         {
-            const std::int64_t whenTrue = ternary();
+            const double whenTrue = ternary();
             if(!accept(":"))
             {
                 ok = false;
                 return 0;
             }
-            const std::int64_t whenFalse = ternary();
-            return condition ? whenTrue : whenFalse;
+            const double whenFalse = ternary();
+            return condition != 0.0 ? whenTrue : whenFalse;
         }
         return condition;
     }
 
-    std::int64_t logicalOr(void)
+    double logicalOr(void)
     {
-        std::int64_t value = logicalAnd();
+        double value = logicalAnd();
         while(accept("||"))
         {
-            const std::int64_t right = logicalAnd();
-            value = (value || right) ? 1 : 0;
+            const double right = logicalAnd();
+            value = (value != 0.0 || right != 0.0) ? 1 : 0;
         }
         return value;
     }
 
-    std::int64_t logicalAnd(void)
+    double logicalAnd(void)
     {
-        std::int64_t value = bitOr();
+        double value = bitOr();
         while(accept("&&"))
         {
-            const std::int64_t right = bitOr();
-            value = (value && right) ? 1 : 0;
+            const double right = bitOr();
+            value = (value != 0.0 && right != 0.0) ? 1 : 0;
         }
         return value;
     }
 
-    std::int64_t bitOr(void)
+    double bitOr(void)
     {
-        std::int64_t value = bitXor();
+        double value = bitXor();
         while(acceptUnless("|", "||"))
         {
-            value |= bitXor();
+            value = static_cast<double>(toInt(value) | toInt(bitXor()));
         }
         return value;
     }
 
-    std::int64_t bitXor(void)
+    double bitXor(void)
     {
-        std::int64_t value = bitAnd();
+        double value = bitAnd();
         while(accept("^"))
         {
-            value ^= bitAnd();
+            value = static_cast<double>(toInt(value) ^ toInt(bitAnd()));
         }
         return value;
     }
 
-    std::int64_t bitAnd(void)
+    double bitAnd(void)
     {
-        std::int64_t value = equality();
+        double value = equality();
         while(acceptUnless("&", "&&"))
         {
-            value &= equality();
+            value = static_cast<double>(toInt(value) & toInt(equality()));
         }
         return value;
     }
 
-    std::int64_t equality(void)
+    double equality(void)
     {
-        std::int64_t value = comparison();
+        double value = comparison();
         while(true)
         {
             if(accept("<>") || accept("!="))
@@ -209,9 +239,9 @@ private:
         }
     }
 
-    std::int64_t comparison(void)
+    double comparison(void)
     {
-        std::int64_t value = shift();
+        double value = shift();
         while(true)
         {
             if(accept("<="))
@@ -237,18 +267,20 @@ private:
         }
     }
 
-    std::int64_t shift(void)
+    double shift(void)
     {
-        std::int64_t value = additive();
+        double value = additive();
         while(true)
         {
             if(accept("<<"))
             {
-                value = static_cast<std::int64_t>(static_cast<std::uint64_t>(value) << (additive() & 63));
+                value = static_cast<double>(
+                    static_cast<std::int64_t>(static_cast<std::uint64_t>(toInt(value)) << (toInt(additive()) & 63)));
             }
             else if(accept(">>"))
             {
-                value = static_cast<std::int64_t>(static_cast<std::uint64_t>(value) >> (additive() & 63));
+                value = static_cast<double>(
+                    static_cast<std::int64_t>(static_cast<std::uint64_t>(toInt(value)) >> (toInt(additive()) & 63)));
             }
             else
             {
@@ -257,9 +289,9 @@ private:
         }
     }
 
-    std::int64_t additive(void)
+    double additive(void)
     {
-        std::int64_t value = multiplicative();
+        double value = multiplicative();
         while(true)
         {
             if(accept("+"))
@@ -277,9 +309,9 @@ private:
         }
     }
 
-    std::int64_t multiplicative(void)
+    double multiplicative(void)
     {
-        std::int64_t value = power();
+        double value = power();
         while(true)
         {
             if(acceptUnless("*", "**"))
@@ -288,13 +320,23 @@ private:
             }
             else if(accept("/"))
             {
-                const std::int64_t divisor = power();
-                value = divisor != 0 ? value / divisor : (ok = false, 0);
+                const double divisor = power();
+                if(divisor == 0.0)
+                {
+                    ok = false;
+                    return 0;
+                }
+                value = integer ? static_cast<double>(toInt(value) / toInt(divisor)) : value / divisor;
             }
             else if(accept("%"))
             {
-                const std::int64_t divisor = power();
-                value = divisor != 0 ? value % divisor : (ok = false, 0);
+                const std::int64_t divisor = toInt(power());
+                if(divisor == 0)
+                {
+                    ok = false;
+                    return 0;
+                }
+                value = static_cast<double>(toInt(value) % divisor);
             }
             else
             {
@@ -303,23 +345,17 @@ private:
         }
     }
 
-    std::int64_t power(void)
+    double power(void)
     {
-        const std::int64_t base = unary();
+        const double base = unary();
         if(accept("**"))
         {
-            const std::int64_t exponent = power();
-            std::int64_t result = 1;
-            for(std::int64_t i = 0; i < exponent && i < 64; ++i)
-            {
-                result *= base;
-            }
-            return result;
+            return std::pow(base, power());
         }
         return base;
     }
 
-    std::int64_t unary(void)
+    double unary(void)
     {
         if(accept("-"))
         {
@@ -331,21 +367,103 @@ private:
         }
         if(accept("~"))
         {
-            return ~unary();
+            return static_cast<double>(~toInt(unary()));
         }
         if(acceptUnless("!", "!="))
         {
-            return unary() ? 0 : 1;
+            return unary() != 0.0 ? 0 : 1;
         }
         return primary();
     }
 
-    std::int64_t primary(void)
+    double function(const std::string& name)
+    {
+        std::vector<double> arguments;
+        if(!accept(")"))
+        {
+            do
+            {
+                arguments.push_back(ternary());
+            }
+            while(accept(","));
+            if(!accept(")"))
+            {
+                ok = false;
+                return 0;
+            }
+        }
+        const double x = arguments.empty() ? 0.0 : arguments.front();
+        if(name == "ABS")
+        {
+            return std::fabs(x);
+        }
+        if(name == "SQRT")
+        {
+            return std::sqrt(x);
+        }
+        if(name == "TRUNC")
+        {
+            return std::trunc(x);
+        }
+        if(name == "FLOOR")
+        {
+            return std::floor(x);
+        }
+        if(name == "CEIL")
+        {
+            return std::ceil(x);
+        }
+        if(name == "EXP")
+        {
+            return std::exp(x);
+        }
+        if(name == "LN")
+        {
+            return std::log(x);
+        }
+        if(name == "LG")
+        {
+            return std::log10(x);
+        }
+        if(name == "SGN")
+        {
+            return x > 0 ? 1.0 : (x < 0 ? -1.0 : 0.0);
+        }
+        if(name == "NEG")
+        {
+            return -x;
+        }
+        if(name == "SIN")
+        {
+            return std::sin(x);
+        }
+        if(name == "COS")
+        {
+            return std::cos(x);
+        }
+        if(name == "TAN")
+        {
+            return std::tan(x);
+        }
+        if(name == "ATAN")
+        {
+            return std::atan(x);
+        }
+        if(name == "ROUND")
+        {
+            const double scale = std::pow(10.0, arguments.size() > 1 ? arguments[1] : 0.0);
+            return std::round(x * scale) / scale;
+        }
+        ok = false;
+        return 0;
+    }
+
+    double primary(void)
     {
         skipSpace();
         if(accept("("))
         {
-            const std::int64_t value = ternary();
+            const double value = ternary();
             if(!accept(")"))
             {
                 ok = false;
@@ -354,14 +472,20 @@ private:
         }
 
         const std::size_t start = position;
-        if(position < text.size() && std::isdigit(static_cast<unsigned char>(text[position])))
+        if(position < text.size()
+           && (std::isdigit(static_cast<unsigned char>(text[position])) || text[position] == '.'))
         {
-            while(position < text.size() && std::isalnum(static_cast<unsigned char>(text[position])))
+            // Hex (0x1F), decimal (12) or real (1.5e-3) literal.
+            while(position < text.size()
+                  && (std::isalnum(static_cast<unsigned char>(text[position])) || text[position] == '.'
+                      || ((text[position] == '-' || text[position] == '+') && position > start
+                          && (text[position - 1] == 'e' || text[position - 1] == 'E')
+                          && text.compare(start, 2, "0x") != 0)))
             {
                 ++position;
             }
-            std::int64_t value = 0;
-            if(!parseNumber(text.substr(start, position - start), &value))
+            double value = 0;
+            if(!parseReal(text.substr(start, position - start), &value))
             {
                 ok = false;
             }
@@ -379,8 +503,21 @@ private:
             ok = false;
             return 0;
         }
-        std::int64_t value = 0;
-        if(!lookup(text.substr(start, position - start), &value))
+        const std::string name = text.substr(start, position - start);
+        if(accept("("))
+        {
+            return function(name);
+        }
+        if(name == "PI")
+        {
+            return 3.14159265358979323846;
+        }
+        if(name == "E")
+        {
+            return 2.71828182845904523536;
+        }
+        double value = 0;
+        if(!lookup(name, &value))
         {
             ok = false;
         }
@@ -698,10 +835,16 @@ bool GenICamNodeMap::evaluate(const std::string& name, std::int64_t* value)
     {
         return readRegister(*node, value);
     }
-    if(node->type == "IntSwissKnife" || node->type == "SwissKnife")
+    if(node->type == "IntSwissKnife" || node->type == "SwissKnife" || node->type == "Float" || node->type == "FloatReg"
+       || node->type == "Converter" || node->type == "IntConverter")
     {
-        const std::string* formula = field("Formula");
-        return formula ? evaluateFormula(*node, *formula, value) : fail(name + " has no formula");
+        double number = 0;
+        if(!evaluateNumber(name, &number))
+        {
+            return false;
+        }
+        *value = static_cast<std::int64_t>(std::llround(number));
+        return true;
     }
     if(node->type == "Integer" || node->type == "Enumeration" || node->type == "Command" || node->type == "Boolean")
     {
@@ -766,6 +909,10 @@ bool GenICamNodeMap::assign(const std::string& name, std::int64_t value)
     {
         return writeRegister(node, value);
     }
+    if(node.type == "Float" || node.type == "FloatReg" || node.type == "Converter" || node.type == "IntConverter")
+    {
+        return assignNumber(name, static_cast<double>(value));
+    }
     if(node.type == "Integer" || node.type == "Enumeration" || node.type == "Boolean")
     {
         if(node.type == "Boolean")
@@ -793,27 +940,302 @@ bool GenICamNodeMap::assign(const std::string& name, std::int64_t value)
     return fail(name + " is a " + node.type + ", which CalibStudio cannot write yet");
 }
 
-bool GenICamNodeMap::evaluateFormula(const Node& node, const std::string& formula, std::int64_t* value)
+bool GenICamNodeMap::evaluateFormula(const Node& node, const std::string& formula,
+                                     const std::map<std::string, double>& extra, bool integer, double* value)
 {
-    const auto lookup = [this, &node](const std::string& variable, std::int64_t* result) -> bool
+    const auto lookup = [this, &node, &extra, integer](const std::string& variable, double* result) -> bool
     {
+        const auto given = extra.find(variable);
+        if(given != extra.end())
+        {
+            *result = given->second;
+            return true;
+        }
         const auto reference = node.variables.find(variable);
         if(reference != node.variables.end())
         {
-            return evaluate(reference->second, result);
+            return evaluateNumber(reference->second, result);
         }
         const auto constant = node.constants.find(variable);
         if(constant != node.constants.end())
         {
-            return parseNumber(constant->second, result) || evaluateFormula(node, constant->second, result);
+            return parseReal(constant->second, result)
+                || evaluateFormula(node, constant->second, extra, integer, result);
         }
         return fail("unknown variable " + variable + " in formula");
     };
 
-    FormulaParser parser(formula, lookup);
+    FormulaParser parser(formula, lookup, integer);
     if(!parser.parse(value))
     {
         return fail(lastError.empty() ? "cannot evaluate formula " + formula : lastError);
+    }
+    return true;
+}
+
+bool GenICamNodeMap::getNumber(const std::string& name, double* value)
+{
+    depth = 0;
+    return evaluateNumber(name, value);
+}
+
+bool GenICamNodeMap::setNumber(const std::string& name, double value)
+{
+    depth = 0;
+    return assignNumber(name, value);
+}
+
+bool GenICamNodeMap::getRange(const std::string& name, double* minimum, double* maximum)
+{
+    depth = 0;
+    const Node* node = find(name);
+    if(!node)
+    {
+        return false;
+    }
+    const auto limit = [this, node](const char* fixed, const char* pointer, double* result)
+    {
+        const auto constant = node->fields.find(fixed);
+        if(constant != node->fields.end() && parseReal(constant->second.front(), result))
+        {
+            return true;
+        }
+        const auto reference = node->fields.find(pointer);
+        return reference != node->fields.end() && evaluateNumber(reference->second.front(), result);
+    };
+    return limit("Min", "pMin", minimum) && limit("Max", "pMax", maximum);
+}
+
+bool GenICamNodeMap::isFloat(const std::string& name) const
+{
+    const auto it = nodes.find(name);
+    if(it == nodes.end())
+    {
+        return false;
+    }
+    const std::string& type = it->second.type;
+    return type == "Float" || type == "FloatReg" || type == "Converter" || type == "SwissKnife";
+}
+
+std::vector<std::string> GenICamNodeMap::enumerationEntries(const std::string& name) const
+{
+    std::vector<std::string> names;
+    const auto it = nodes.find(name);
+    if(it != nodes.end())
+    {
+        for(const auto& entry : it->second.entries)
+        {
+            names.push_back(entry.first);
+        }
+    }
+    return names;
+}
+
+bool GenICamNodeMap::evaluateNumber(const std::string& name, double* value)
+{
+    if(++depth > kMaxDepth)
+    {
+        return fail("feature references are nested too deeply at " + name);
+    }
+    struct DepthGuard
+    {
+        int& depth;
+        ~DepthGuard(void)
+        {
+            --depth;
+        }
+    } guard{depth};
+
+    const Node* node = find(name);
+    if(!node)
+    {
+        return false;
+    }
+    const auto field = [node](const char* key) -> const std::string*
+    {
+        const auto it = node->fields.find(key);
+        return it == node->fields.end() || it->second.empty() ? nullptr : &it->second.front();
+    };
+
+    if(node->type == "FloatReg")
+    {
+        return readFloatRegister(*node, value);
+    }
+    if(node->type == "Float")
+    {
+        if(const std::string* pValue = field("pValue"))
+        {
+            return evaluateNumber(*pValue, value);
+        }
+        if(const std::string* constant = field("Value"))
+        {
+            return parseReal(*constant, value) || fail(name + " has an invalid value");
+        }
+        return fail(name + " has no value");
+    }
+    if(node->type == "Converter" || node->type == "IntConverter")
+    {
+        const std::string* pValue = field("pValue");
+        const std::string* formula = field("FormulaFrom");
+        double raw = 0;
+        if(!pValue || !formula || !evaluateNumber(*pValue, &raw))
+        {
+            return pValue && formula ? false : fail(name + " is incomplete");
+        }
+        return evaluateFormula(*node, *formula,
+                               {
+                                   {"TO", raw}
+        },
+                               node->type == "IntConverter", value);
+    }
+    if(node->type == "SwissKnife" || node->type == "IntSwissKnife")
+    {
+        const std::string* formula = field("Formula");
+        return formula ? evaluateFormula(*node, *formula, {}, node->type == "IntSwissKnife", value)
+                       : fail(name + " has no formula");
+    }
+
+    std::int64_t integer = 0;
+    if(!evaluate(name, &integer))
+    {
+        return false;
+    }
+    *value = static_cast<double>(integer);
+    return true;
+}
+
+bool GenICamNodeMap::assignNumber(const std::string& name, double value)
+{
+    if(++depth > kMaxDepth)
+    {
+        return fail("feature references are nested too deeply at " + name);
+    }
+    struct DepthGuard
+    {
+        int& depth;
+        ~DepthGuard(void)
+        {
+            --depth;
+        }
+    } guard{depth};
+
+    const auto it = nodes.find(name);
+    if(it == nodes.end())
+    {
+        return fail("no feature " + name);
+    }
+    Node& node = it->second;
+    const auto pValue = node.fields.find("pValue");
+    const bool hasPointer = pValue != node.fields.end() && !pValue->second.empty();
+
+    if(node.type == "FloatReg")
+    {
+        return writeFloatRegister(node, value);
+    }
+    if(node.type == "Float")
+    {
+        if(hasPointer)
+        {
+            return assignNumber(pValue->second.front(), value);
+        }
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+        node.fields["Value"] = {buffer};
+        return true;
+    }
+    if(node.type == "Converter" || node.type == "IntConverter")
+    {
+        const auto formula = node.fields.find("FormulaTo");
+        double raw = 0;
+        if(!hasPointer || formula == node.fields.end()
+           || !evaluateFormula(node, formula->second.front(),
+                               {
+                                   {"FROM", value}
+        },
+                               node.type == "IntConverter", &raw))
+        {
+            return hasPointer && formula != node.fields.end() ? false : fail(name + " is incomplete");
+        }
+        return assignNumber(pValue->second.front(), raw);
+    }
+    return assign(name, static_cast<std::int64_t>(std::llround(value)));
+}
+
+bool GenICamNodeMap::readFloatRegister(const Node& node, double* value)
+{
+    std::uint64_t address = 0;
+    std::size_t length = 0;
+    if(!registerAddress(node, &address) || !registerLength(node, &length))
+    {
+        return false;
+    }
+    if(length != 4 && length != 8)
+    {
+        return fail("unsupported float register length " + std::to_string(length));
+    }
+    std::uint8_t bytes[8] = {};
+    if(!port || !port->read(address, bytes, length))
+    {
+        return fail("cannot read register at address " + std::to_string(address));
+    }
+
+    const auto endianess = node.fields.find("Endianess");
+    const bool bigEndian = endianess != node.fields.end() && endianess->second.front() == "BigEndian";
+    std::uint64_t raw = 0;
+    for(std::size_t i = 0; i < length; ++i)
+    {
+        raw |= static_cast<std::uint64_t>(bytes[i]) << (bigEndian ? 8 * (length - 1 - i) : 8 * i);
+    }
+    if(length == 4)
+    {
+        const auto bits = static_cast<std::uint32_t>(raw);
+        float single = 0;
+        std::memcpy(&single, &bits, sizeof(single));
+        *value = single;
+    }
+    else
+    {
+        std::memcpy(value, &raw, sizeof(*value));
+    }
+    return true;
+}
+
+bool GenICamNodeMap::writeFloatRegister(const Node& node, double value)
+{
+    std::uint64_t address = 0;
+    std::size_t length = 0;
+    if(!registerAddress(node, &address) || !registerLength(node, &length))
+    {
+        return false;
+    }
+    if(length != 4 && length != 8)
+    {
+        return fail("unsupported float register length " + std::to_string(length));
+    }
+
+    std::uint64_t raw = 0;
+    if(length == 4)
+    {
+        const auto single = static_cast<float>(value);
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &single, sizeof(bits));
+        raw = bits;
+    }
+    else
+    {
+        std::memcpy(&raw, &value, sizeof(raw));
+    }
+
+    const auto endianess = node.fields.find("Endianess");
+    const bool bigEndian = endianess != node.fields.end() && endianess->second.front() == "BigEndian";
+    std::uint8_t bytes[8] = {};
+    for(std::size_t i = 0; i < length; ++i)
+    {
+        bytes[i] = static_cast<std::uint8_t>((raw >> (bigEndian ? 8 * (length - 1 - i) : 8 * i)) & 0xFF);
+    }
+    if(!port || !port->write(address, bytes, length))
+    {
+        return fail("cannot write register at address " + std::to_string(address));
     }
     return true;
 }

@@ -9,10 +9,14 @@
 
 #include <opencv2/core/mat.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace calib
@@ -29,6 +33,15 @@ class GigEDevice
 private:
     class ControlPort;
 
+    struct RawFrame
+    {
+        std::vector<std::uint8_t> data;
+        std::size_t size = 0;
+        std::uint32_t pixelFormat = 0;
+        int width = 0;
+        int height = 0;
+    };
+
     GvcpClient control;
     UdpSocket stream;
     GenICamNodeMap nodes;
@@ -44,6 +57,14 @@ private:
     std::chrono::steady_clock::time_point nextHeartbeat;
     int failedHeartbeats = 0;
     std::string lastError;
+    std::thread receiver;
+    std::atomic<bool> receiving{false};
+    std::atomic<bool> streamFailed{false};
+    std::mutex frameMutex;
+    std::condition_variable frameArrived;
+    RawFrame ready;
+    bool hasReady = false;
+    RawFrame current;
 
 public:
     GigEDevice(void);
@@ -70,7 +91,7 @@ public:
     }
     std::uint32_t getPixelFormat(void) const
     {
-        return assembler.getPixelFormat();
+        return current.pixelFormat;
     }
     std::uint64_t getIncompleteFrames(void) const
     {
@@ -91,7 +112,13 @@ public:
 
 private:
     bool loadNodeMap(std::string* error);
-    bool configureStream(std::uint32_t hostIp, std::string* error);
+    bool configureStream(const CameraInfo& camera, std::string* error);
+    std::uint32_t negotiatePacketSize(std::uint32_t hostMtu);
+    bool packetSizeWorks(std::uint32_t flags, std::uint32_t* size);
+    void startReceiver(void);
+    void stopReceiver(void);
+    void receiveLoop(void);
+    void publishAssembledFrame(void);
     void prepareAcquisition(void);
     bool keepAlive(void);
     void openFirewallPath(void);

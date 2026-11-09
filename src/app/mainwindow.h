@@ -113,6 +113,7 @@ private:
     void onFlipChanged(bool horizontal, bool vertical);
     void onControlRequested(calib::CameraControlId id, const calib::CameraControlState& state);
     void onResetRequested(void);
+    void onAutoTargetChanged(int brightness);
     void onFiltersChanged(const calib::FilterSettings& filterSettings);
 
     calib::CameraProfile* activeProfile(void);

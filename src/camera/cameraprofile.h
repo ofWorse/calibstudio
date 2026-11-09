@@ -18,6 +18,7 @@ struct CameraProfile
     std::map<CameraControlId, CameraControlState> controls;
     bool flipHorizontal = false;
     bool flipVertical = false;
+    int autoTarget = 0;
 };
 
 
