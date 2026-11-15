@@ -1,0 +1,16 @@
+# Qt Creator / qmake
+*.pro.user
+*.pro.user.*
+build-*/
+.qtc_clangd/
+.qmake.stash
+Makefile*
+*.qm
+
+# Build output and packages
+dist/
+third_party/
+*.exe
+*.dll
+*.o
+*.a

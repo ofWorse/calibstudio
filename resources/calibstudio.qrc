@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="calibstudio-16.png">icons/calibstudio-16.png</file>
+        <file alias="calibstudio-24.png">icons/calibstudio-24.png</file>
+        <file alias="calibstudio-32.png">icons/calibstudio-32.png</file>
+        <file alias="calibstudio-48.png">icons/calibstudio-48.png</file>
+        <file alias="calibstudio-64.png">icons/calibstudio-64.png</file>
+        <file alias="calibstudio-128.png">icons/calibstudio-128.png</file>
+        <file alias="calibstudio-256.png">icons/calibstudio-256.png</file>
+    </qresource>
+</RCC>

@@ -104,6 +104,14 @@ win32 {
     HEADERS += src/camera/generic/opencvprobeprovider.h
 }
 
+RESOURCES += \
+    resources/calibstudio.qrc
+
+VERSION = 1.0.0
+QMAKE_TARGET_PRODUCT = CalibStudio
+QMAKE_TARGET_DESCRIPTION = CalibStudio
+win32: RC_ICONS = resources/icons/calibstudio.ico
+
 TRANSLATIONS += \
     translations/CalibStudio_en_US.ts
 CONFIG += lrelease

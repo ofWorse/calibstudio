@@ -2,6 +2,7 @@
 #include "ui/theme.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QLocale>
 #include <QTranslator>
 
@@ -9,6 +10,13 @@ int main(int argc, char* argv[])
 {
     QApplication a(argc, argv);
     QApplication::setApplicationName(QStringLiteral("CalibStudio"));
+
+    QIcon appIcon;
+    for(const int size : {16, 24, 32, 48, 64, 128, 256})
+    {
+        appIcon.addFile(QStringLiteral(":/icons/calibstudio-%1.png").arg(size), QSize(size, size));
+    }
+    QApplication::setWindowIcon(appIcon);
     calib::theme::apply(a);
 
     QTranslator translator;
