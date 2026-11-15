@@ -4,7 +4,7 @@
 <p><strong>A lightweight Windows tool for viewing and tuning USB and GigE Vision cameras, with no vendor SDK required.</strong></p>
 <p>CalibStudio finds your cameras, fixes GigE network settings automatically, and streams several cameras side by side in a dark, distraction-free workspace, with low latency from the sensor to the screen.</p>
 <hr>
-<img width="1919" height="1008" alt="Screenshot 2026-11-09 192915" src="https://github.com/user-attachments/assets/0a4dde05-9c8f-4c98-af24-6eeb3934e92f" />
+<img width="1919" height="1034" alt="Screenshot 2026-11-15 142426" src="https://github.com/user-attachments/assets/c1e05294-8034-47b7-a7d0-a466e4623d4b" />
 <h2>✨ Highlights</h2>
 <h3>📷 Cameras</h3>
 <ul>
